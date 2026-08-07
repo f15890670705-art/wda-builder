@@ -56,6 +56,14 @@ ipa:
 	@rm -rf $(BUILD_DIR)/Payload
 	@mkdir -p $(BUILD_DIR)/Payload
 	@cp -R $(APP_DIR) $(BUILD_DIR)/Payload/
+	# PkgInfo —— iOS 安装器要求存在 (8 字节 "APPL????")
+	@printf 'APPL????' > $(APP_DIR)/PkgInfo
+	@cp $(APP_DIR)/PkgInfo $(BUILD_DIR)/Payload/$(APP_NAME).app/PkgInfo
+	# 注入 SDK 字段（覆盖模板里的占位，plutil 不会写数组空写 plist 的语法糖有问题）
+	@plutil -insert CFBundleSupportedPlatforms -json '["iPhoneOS"]' $(APP_DIR)/Info.plist 2>/dev/null || \
+	  plutil -replace CFBundleSupportedPlatforms -json '["iPhoneOS"]' $(APP_DIR)/Info.plist
+	@plutil -insert UILaunchScreen -json '{}' $(APP_DIR)/Info.plist 2>/dev/null || \
+	  plutil -replace UILaunchScreen -json '{}' $(APP_DIR)/Info.plist
 	@cd $(BUILD_DIR) && zip -r $(APP_NAME).ipa Payload -x "*.DS_Store"
 	@echo "== ipa: $(BUILD_DIR)/$(APP_NAME).ipa =="
 

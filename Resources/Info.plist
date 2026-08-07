@@ -17,9 +17,41 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>8.0</string>
+	<string>9.0</string>
 	<key>CFBundleVersion</key>
-	<string>8</string>
+	<string>9</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>iPhoneOS</string>
+	</array>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleIconFile</key>
+	<string></string>
+	<key>CFBundleIconFiles</key>
+	<array/>
+	<key>UILaunchScreen</key>
+	<dict/>
+
+	<!-- DT SDK 字段（iOS 安装器必读，缺了会 Parse Error 301） -->
+	<key>BuildMachineOSBuild</key>
+	<string>25C56</string>
+	<key>DTPlatformVersion</key>
+	<string>18.5</string>
+	<key>DTPlatformBuild</key>
+	<string>22F76</string>
+	<key>DTPlatformName</key>
+	<string>iphoneos</string>
+	<key>DTSDKBuild</key>
+	<string>22F76</string>
+	<key>DTSDKName</key>
+	<string>iphoneos18.5</string>
+	<key>DTXcode</key>
+	<string>1630</string>
+	<key>DTXcodeBuild</key>
+	<string>16F6</string>
+	<key>DTCompiler</key>
+	<string>com.apple.compilers.llvm.clang.1_0</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MinimumOSVersion</key>

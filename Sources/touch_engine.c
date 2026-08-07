@@ -50,7 +50,27 @@ static void dlog(const char *fmt, ...) {
 static void *io_handle;
 static void *hid_client;
 static uint64_t g_sender_id = 0;
+static uint64_t g_fallback_sender = 0;
 static int g_seq = 1000;
+
+/* 从 MobileGestalt 取 BootSessionID 并派生一个稳定的 fallback senderID */
+static uint64_t boot_session_sender(void) {
+    void *mg = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
+    if (!mg) { LOG("MobileGestalt dlopen failed"); return 0; }
+    void* (*copyAnswer)(CFStringRef) = dlsym(mg, "MGCopyAnswer");
+    if (!copyAnswer) { LOG("MGCopyAnswer not found"); return 0; }
+    CFStringRef bs = copyAnswer(CFSTR("BootSessionID"));
+    if (!bs) { LOG("BootSessionID nil"); return 0; }
+    char buf[128] = {0};
+    CFStringGetCString(bs, buf, sizeof(buf), kCFStringEncodingUTF8);
+    CFRelease(bs);
+    LOG("BootSessionID='%s'", buf);
+    /* 派生 64 位 senderID：FNV-1a hash */
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (char *p = buf; *p; p++) { h ^= (unsigned char)*p; h *= 0x100000001b3ULL; }
+    h |= 0x0000000080000000ULL;  /* 保持高位特征 */
+    return h;
+}
 
 typedef void* (*fn_CreateDigitizer)(void*, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
     double, double, double, double, double, uint32_t, uint32_t, uint32_t);
@@ -122,13 +142,17 @@ static int hid_init(void) {
     }
 
     LOG("HID engine ready, waiting real touch to capture senderID");
+    g_fallback_sender = boot_session_sender();
+    LOG("fallback senderID=0x%llx", (unsigned long long)g_fallback_sender);
     return 0;
 }
 
 /* phase: 1=down 2=move 3=up */
 static void send_digitizer(float x, float y, int phase) {
     if (!hid_client) return;
-    if (!g_sender_id) { LOG("no senderID yet, drop (touch screen once)"); return; }
+    /* senderID 优先级：真实提取 > boot session fallback。无条件注入。 */
+    uint64_t sender = g_sender_id ? g_sender_id : g_fallback_sender;
+    if (!sender) { LOG("no senderID available, drop"); return; }
 
     uint64_t ts = mach_absolute_time();
     float nx = x / 375.0f, ny = y / 812.0f;
@@ -158,7 +182,7 @@ static void send_digitizer(float x, float y, int phase) {
         CFRelease(f);
     }
 
-    if (p_SetSender) p_SetSender(d, g_sender_id);
+    if (p_SetSender) p_SetSender(d, sender);
     p_Dispatch(hid_client, d);
     CFRelease(d);
     g_seq++;
@@ -200,9 +224,10 @@ static void handle_cmd(int fd, const char *line) {
     } else if (strcmp(cmd, "UP") == 0 && n >= 3) {
         send_digitizer(a, b, 3); write(fd, "OK\n", 3);
     } else if (strcmp(cmd, "STATUS") == 0) {
-        char buf[128];
-        snprintf(buf, sizeof(buf), "engine=ready senderid=%llx seq=%d\n",
-            (unsigned long long)g_sender_id, g_seq);
+        char buf[160];
+        uint64_t sender = g_sender_id ? g_sender_id : g_fallback_sender;
+        snprintf(buf, sizeof(buf), "engine=ready senderid=%llx fallback=%llx seq=%d\n",
+            (unsigned long long)g_sender_id, (unsigned long long)sender, g_seq);
         write(fd, buf, strlen(buf));
     } else {
         write(fd, "ERR unknown\n", 12);

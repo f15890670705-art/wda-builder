@@ -68,5 +68,14 @@
 		<string>kTCCServiceAccessibility</string>
 		<string>kTCCServiceAll</string>
 	</array>
+
+	<!-- ========== root 引擎（touch_engine）相关 ========== -->
+	<!-- persona 管理：允许 posix_spawn persona(99)/uid 0 拉起 root 子进程（Ailin 同款） -->
+	<key>com.apple.private.persona-mgmt</key>
+	<true/>
+	<key>com.apple.system-task-ports</key>
+	<true/>
+	<key>com.apple.private.security.container-manager</key>
+	<true/>
 </dict>
 </plist>

@@ -1,9 +1,11 @@
-# AilinTouch — Ailin 方式的 TrollStore 触摸注入 IPA
+# AilinTouch — Ailin 方式 TrollStore 触摸注入 IPA（root 引擎架构）
 #
-#   make build  → clang 编译（iphoneos SDK）
-#   make sign   → ldid 注入 Entitlements.plist 签名
+#   make build  → clang 编译两个二进制（App + touch_engine）
+#   make sign   → ldid 分别注入 Entitlements.plist 签名
 #   make ipa    → 打包 .ipa
 #   make all    → 三步全做
+#
+# 架构：主 App（HTTP :8080）→ Unix socket → touch_engine（root 进程，HID 注入）
 #
 # 环境：macOS + Xcode（iphoneos SDK）+ ldid（brew install ldid）
 # 无 Mac？用 .github/workflows/build-ipa.yml 在 GitHub Actions 免费云构建
@@ -24,20 +26,27 @@ LDFLAGS = -arch $(ARCH) -isysroot $(SDK) \
           -framework CoreFoundation -framework CoreGraphics \
           -framework IOKit -framework QuartzCore
 
-SOURCES = Sources/main.m Sources/AppDelegate.m Sources/TouchEngine.c
+APP_SOURCES  = Sources/main.m Sources/AppDelegate.m
+ENGINE_SOURCE = Sources/touch_engine.c
 
 all: build sign ipa
 
 build:
 	@mkdir -p $(APP_DIR)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(SOURCES) -o $(APP_DIR)/$(APP_NAME)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(APP_SOURCES) -o $(APP_DIR)/$(APP_NAME)
+	$(CC) $(CFLAGS) $(ENGINE_SOURCE) -o $(APP_DIR)/touch_engine
 	@cp Resources/Info.plist $(APP_DIR)/Info.plist
-	@echo "== build done =="
+	@echo "== build done (App + touch_engine) =="
 
 sign:
-	@echo "== signing with Entitlements.plist =="
+	@echo "== signing App =="
 	ldid -SEntitlements.plist $(APP_DIR)/$(APP_NAME)
-	ldid -e $(APP_DIR)/$(APP_NAME) | grep -q "event-dispatch" && echo "OK: event-dispatch entitlement present" || echo "WARN: event-dispatch missing!"
+	@echo "== signing touch_engine =="
+	ldid -SEntitlements.plist $(APP_DIR)/touch_engine
+	@chmod 755 $(APP_DIR)/touch_engine
+	@echo "== verify =="
+	@ldid -e $(APP_DIR)/$(APP_NAME) | grep -q "event-dispatch" && echo "OK: App event-dispatch" || echo "WARN: App event-dispatch missing"
+	@ldid -e $(APP_DIR)/touch_engine | grep -q "event-dispatch" && echo "OK: engine event-dispatch" || echo "WARN: engine event-dispatch missing"
 
 ipa:
 	@rm -rf $(BUILD_DIR)/Payload

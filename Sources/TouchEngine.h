@@ -13,6 +13,9 @@ extern "C" {
 /* 初始化 HID 客户端。返回 0 成功，负值为错误码（用 TouchEngineDiag 看详情） */
 int TouchEngineInit(void);
 
+/* 设置屏幕尺寸（逻辑点），用于坐标归一化。App 启动时传入 UIScreen bounds */
+void TouchEngineSetScreenSize(float w, float h);
+
 /* 返回诊断信息字符串（初始化失败原因 / ready） */
 const char* TouchEngineDiag(void);
 

@@ -21,11 +21,12 @@
 #import <pthread.h>
 #import <dlfcn.h>
 #import <signal.h>
+#import <net/if.h>
 
 #define SERVER_PORT       8080
 #define ENGINE_SOCK       "/tmp/ailintouch.sock"
-#define ENGINE_PID_PATH   "/var/mobile/ailintouch_engine.pid"
-#define ENGINE_LOG_PATH   "/var/mobile/ailintouch_engine.log"
+#define ENGINE_PID_PATH   @"/var/mobile/ailintouch_engine.pid"
+#define ENGINE_LOG_PATH   @"/var/mobile/ailintouch_engine.log"
 
 extern char **environ;
 static AppDelegate *g_delegate;
@@ -33,12 +34,6 @@ static AppDelegate *g_delegate;
 #pragma mark - AppDelegate
 
 @interface AppDelegate () <UINavigationControllerDelegate>
-@property (nonatomic, strong) UIWindow *window;
-@property (nonatomic, strong) UINavigationController *nav;
-@property (nonatomic, strong) ATTabBarController *tabBar;
-@property (nonatomic, strong) ControlPanelViewController *controlVC;
-@property (nonatomic, strong) ServiceManagerViewController *serviceVC;
-
 @property (nonatomic, assign) pid_t enginePid;
 @property (nonatomic, strong) NSString *cachedIP;
 @end

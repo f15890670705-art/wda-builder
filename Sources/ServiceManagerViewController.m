@@ -351,18 +351,35 @@
     ATChipBadge *badge = [ATChipBadge badgeWithText:@"  服务控制  " fg:ATPurple() bg:ATPurpleBg()];
     [self.cardControl addSubview:badge];
 
-    /* 启动 / 停止 */
+    /* 启动 / 停止：UIStackView 等分两半 */
     self.startBtn = [self buildBigButton:@"启动服务" bg:ATGreenBg() fg:ATGreen()];
     self.stopBtn  = [self buildBigButton:@"停止服务" bg:ATRedBg() fg:ATRed()];
     [self.startBtn addTarget:self action:@selector(didTapStart) forControlEvents:UIControlEventTouchUpInside];
     [self.stopBtn  addTarget:self action:@selector(didTapStop)  forControlEvents:UIControlEventTouchUpInside];
-    [self.cardControl addSubview:self.startBtn];
-    [self.cardControl addSubview:self.stopBtn];
 
-    /* 刷新状态 (单独居中靠左) */
+    UIStackView *startStopRow = [UIStackView new];
+    startStopRow.translatesAutoresizingMaskIntoConstraints = NO;
+    startStopRow.axis = UILayoutConstraintAxisHorizontal;
+    startStopRow.distribution = UIStackViewDistributionFillEqually;
+    startStopRow.alignment = UIStackViewAlignmentFill;
+    startStopRow.spacing = 12;
+    [startStopRow addArrangedSubview:self.startBtn];
+    [startStopRow addArrangedSubview:self.stopBtn];
+    [self.cardControl addSubview:startStopRow];
+
+    /* 刷新状态：单独居中 */
+    UIStackView *refreshWrap = [UIStackView new];
+    refreshWrap.translatesAutoresizingMaskIntoConstraints = NO;
+    refreshWrap.axis = UILayoutConstraintAxisHorizontal;
+    refreshWrap.distribution = UIStackViewDistributionFillEqually;
+    refreshWrap.alignment = UIStackViewAlignmentFill;
+    refreshWrap.spacing = 12;
+    [refreshWrap addArrangedSubview:[UIView new]];   /* 左侧占位 */
     self.refreshBtn = [self buildBigButton:@"刷新状态" bg:ATBlueBg() fg:ATBlue()];
     [self.refreshBtn addTarget:self action:@selector(didTapRefresh) forControlEvents:UIControlEventTouchUpInside];
-    [self.cardControl addSubview:self.refreshBtn];
+    [refreshWrap addArrangedSubview:self.refreshBtn];
+    [refreshWrap addArrangedSubview:[UIView new]];   /* 右侧占位 */
+    [self.cardControl addSubview:refreshWrap];
 
     /* 文件浏览器小标题 */
     UILabel *filesTitle = [UILabel new];
@@ -372,51 +389,50 @@
     filesTitle.textColor = ATText();
     [self.cardControl addSubview:filesTitle];
 
-    /* 日志 / 工作 目录 */
+    /* 日志 / 工作 目录：等分两半 */
     self.logBtn  = [self buildBigButton:@"📁  日志目录" bg:ATGreen() fg:[UIColor whiteColor]];
     self.workBtn = [self buildBigButton:@"📁  工作目录" bg:ATBrown() fg:[UIColor whiteColor]];
     [self.logBtn  addTarget:self action:@selector(didTapLog)  forControlEvents:UIControlEventTouchUpInside];
     [self.workBtn addTarget:self action:@selector(didTapWork) forControlEvents:UIControlEventTouchUpInside];
-    [self.cardControl addSubview:self.logBtn];
-    [self.cardControl addSubview:self.workBtn];
+
+    UIStackView *fileRow = [UIStackView new];
+    fileRow.translatesAutoresizingMaskIntoConstraints = NO;
+    fileRow.axis = UILayoutConstraintAxisHorizontal;
+    fileRow.distribution = UIStackViewDistributionFillEqually;
+    fileRow.alignment = UIStackViewAlignmentFill;
+    fileRow.spacing = 12;
+    [fileRow addArrangedSubview:self.logBtn];
+    [fileRow addArrangedSubview:self.workBtn];
+    [self.cardControl addSubview:fileRow];
 
     [NSLayoutConstraint activateConstraints:@[
         [badge.topAnchor      constraintEqualToAnchor:self.cardControl.topAnchor constant:16],
         [badge.leadingAnchor  constraintEqualToAnchor:self.cardControl.leadingAnchor constant:16],
         [badge.heightAnchor   constraintEqualToConstant:26],
 
-        /* 启动/停止 */
-        [self.startBtn.topAnchor     constraintEqualToAnchor:badge.bottomAnchor constant:14],
-        [self.startBtn.leadingAnchor constraintEqualToAnchor:self.cardControl.leadingAnchor constant:16],
-        [self.stopBtn.topAnchor     constraintEqualToAnchor:self.startBtn.topAnchor],
-        [self.stopBtn.trailingAnchor constraintEqualToAnchor:self.cardControl.trailingAnchor constant:-16],
-        [self.startBtn.trailingAnchor constraintEqualToAnchor:self.stopBtn.leadingAnchor constant:-12],
-        [self.startBtn.heightAnchor  constraintEqualToConstant:48],
-        [self.stopBtn.heightAnchor   constraintEqualToConstant:48],
+        /* 启动/停止 — 等分 */
+        [startStopRow.topAnchor      constraintEqualToAnchor:badge.bottomAnchor constant:14],
+        [startStopRow.leadingAnchor  constraintEqualToAnchor:self.cardControl.leadingAnchor constant:16],
+        [startStopRow.trailingAnchor constraintEqualToAnchor:self.cardControl.trailingAnchor constant:-16],
+        [startStopRow.heightAnchor   constraintEqualToConstant:48],
 
-        /* 刷新状态：单独左侧，宽度减半 */
-        [self.refreshBtn.topAnchor     constraintEqualToAnchor:self.startBtn.bottomAnchor constant:12],
-        [self.refreshBtn.leadingAnchor constraintEqualToAnchor:self.cardControl.leadingAnchor constant:16],
-        [self.refreshBtn.widthAnchor   constraintEqualToAnchor:self.cardControl.widthAnchor multiplier:0.5 constant:-22],
-        [self.refreshBtn.heightAnchor  constraintEqualToConstant:48],
+        /* 刷新状态 — 居中 */
+        [refreshWrap.topAnchor      constraintEqualToAnchor:startStopRow.bottomAnchor constant:12],
+        [refreshWrap.leadingAnchor  constraintEqualToAnchor:self.cardControl.leadingAnchor constant:16],
+        [refreshWrap.trailingAnchor constraintEqualToAnchor:self.cardControl.trailingAnchor constant:-16],
+        [refreshWrap.heightAnchor   constraintEqualToConstant:48],
 
         /* 文件浏览器小标题 */
-        [filesTitle.topAnchor     constraintEqualToAnchor:self.refreshBtn.bottomAnchor constant:18],
+        [filesTitle.topAnchor     constraintEqualToAnchor:refreshWrap.bottomAnchor constant:18],
         [filesTitle.leadingAnchor constraintEqualToAnchor:self.cardControl.leadingAnchor constant:16],
         [filesTitle.trailingAnchor constraintLessThanOrEqualToAnchor:self.cardControl.trailingAnchor constant:-16],
 
-        /* 日志 / 工作 */
-        [self.logBtn.topAnchor     constraintEqualToAnchor:filesTitle.bottomAnchor constant:10],
-        [self.logBtn.leadingAnchor constraintEqualToAnchor:self.cardControl.leadingAnchor constant:16],
-        [self.logBtn.trailingAnchor constraintEqualToAnchor:self.cardControl.centerXAnchor constant:-6],
-        [self.logBtn.heightAnchor  constraintEqualToConstant:48],
-
-        [self.workBtn.topAnchor     constraintEqualToAnchor:self.logBtn.topAnchor],
-        [self.workBtn.leadingAnchor constraintEqualToAnchor:self.cardControl.centerXAnchor constant:6],
-        [self.workBtn.trailingAnchor constraintEqualToAnchor:self.cardControl.trailingAnchor constant:-16],
-        [self.workBtn.heightAnchor  constraintEqualToConstant:48],
-
-        [self.workBtn.bottomAnchor constraintEqualToAnchor:self.cardControl.bottomAnchor constant:-16],
+        /* 文件浏览两按钮 — 等分 */
+        [fileRow.topAnchor      constraintEqualToAnchor:filesTitle.bottomAnchor constant:10],
+        [fileRow.leadingAnchor  constraintEqualToAnchor:self.cardControl.leadingAnchor constant:16],
+        [fileRow.trailingAnchor constraintEqualToAnchor:self.cardControl.trailingAnchor constant:-16],
+        [fileRow.heightAnchor   constraintEqualToConstant:48],
+        [fileRow.bottomAnchor   constraintEqualToAnchor:self.cardControl.bottomAnchor constant:-16],
     ]];
 }
 

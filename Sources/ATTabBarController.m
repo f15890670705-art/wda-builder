@@ -97,6 +97,7 @@
         icon.translatesAutoresizingMaskIntoConstraints = NO;
         icon.contentMode = UIViewContentModeScaleAspectFit;
         icon.image = [self symbolImage:self.symbolNames[i] size:24 color:ATSubText()];
+        icon.userInteractionEnabled = NO;     /* 不吃 hitTest，让 UIControl 接收 */
         [icon.widthAnchor constraintEqualToConstant:28].active = YES;
         [icon.heightAnchor constraintEqualToConstant:28].active = YES;
         [self.tabIcons addObject:icon];
@@ -107,6 +108,7 @@
         label.text = self.titles[i];
         label.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
         label.textAlignment = NSTextAlignmentCenter;
+        label.userInteractionEnabled = NO;     /* 同上 */
         [self.tabLabels addObject:label];
         [col addArrangedSubview:label];
 

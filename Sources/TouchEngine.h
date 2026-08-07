@@ -4,6 +4,8 @@
 #ifndef TOUCH_ENGINE_H
 #define TOUCH_ENGINE_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif

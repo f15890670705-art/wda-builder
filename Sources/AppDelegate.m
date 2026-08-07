@@ -43,6 +43,7 @@ static AppDelegate *g_delegate;
 @property (nonatomic, strong) ControlPanelViewController *controlVC;
 @property (nonatomic, strong) ServiceManagerViewController *serviceVC;
 @property (nonatomic, assign) pid_t enginePid;
+@property (nonatomic, assign) BOOL  engineStopped;   /* 用户手动停止后 watchdog 不再复活 */
 @property (nonatomic, strong) NSString *cachedIP;
 @end
 
@@ -123,19 +124,26 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     self.enginePid = [self spawnEngineAsRoot];
 }
 
-/* 恢复 launchd 常驻（开机自启 + KeepAlive），然后拉起引擎 */
+/* 启动服务：先判断是否已启动；未启动才拉起 */
 - (void)startService {
-    /* 1. launchctl load -w 恢复守护配置 */
-    [self runLaunchctlLoad:YES];
-    /* 2. 拉起引擎（launchd 有 KeepAlive，spawn 后会被托管常驻） */
-    if (![self engineAlive]) {
-        self.enginePid = [self spawnEngineAsRoot];
+    if ([self engineAlive]) {
+        /* 已启动：只确保 launchd 配置在，不重复拉起 */
+        NSLog(@"[AilinTouch] startService: already running");
+        [self runLaunchctlLoad:YES];
+        self.engineStopped = NO;
+        return;
     }
+    /* 未启动：恢复 launchd 常驻 + 拉起引擎 */
+    NSLog(@"[AilinTouch] startService: starting...");
+    [self runLaunchctlLoad:YES];
+    self.engineStopped = NO;
+    self.enginePid = [self spawnEngineAsRoot];
     NSLog(@"[AilinTouch] startService done, alive=%d", [self engineAlive]);
 }
 
 /* 停止服务：先 unload launchd（否则 KeepAlive 会把引擎立刻拉起来），再 SHUTDOWN/kill */
 - (void)stopEngine {
+    self.engineStopped = YES;   /* 通知 watchdog 不要复活 */
     /* 1. launchctl unload —— 关键：把 KeepAlive 关掉，杀掉的引擎才不会被自动拉起 */
     [self runLaunchctlLoad:NO];
     /* 2. 礼貌退出 */
@@ -254,13 +262,14 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     /* 按钮回调 */
     __weak typeof(self) ws = self;
     self.serviceVC.onTapStart = ^{
+        BOOL wasRunning = [ws engineAlive];
         [ws startService];
-        [ws showToast:@"启动服务"];
+        [ws showToast:wasRunning ? @"服务已启动" : @"启动服务中"];
         [ws refreshStatus];
     };
     self.serviceVC.onTapStop = ^{
         [ws stopEngine];
-        [ws showToast:@"停止服务"];
+        [ws showToast:@"服务已停止"];
         [ws refreshStatus];
     };
     self.serviceVC.onTapRefreshStatus = ^{
@@ -294,10 +303,10 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     }];
     [self refreshStatus];
 
-    /* 3. watchdog — 引擎死了 5 秒重起 */
+    /* 3. watchdog — 引擎意外死了 5 秒重起（用户手动停止后不复活） */
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
         while (YES) {
-            if (![self engineAlive] && self.enginePid > 0) {
+            if (![self engineAlive] && !self.engineStopped) {
                 NSLog(@"[AilinTouch] watchdog: engine 8080 down, re-spawn");
                 dispatch_async(dispatch_get_main_queue(), ^{
                     self.enginePid = [self spawnEngineAsRoot];

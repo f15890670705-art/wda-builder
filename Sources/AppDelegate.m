@@ -6,6 +6,7 @@
 #import <spawn.h>
 #import <pthread.h>
 #import <dlfcn.h>
+#import <signal.h>
 
 #define SERVER_PORT 8080
 #define ENGINE_SOCK "/tmp/ailintouch.sock"
@@ -83,6 +84,27 @@ static void *http_thread(void *arg) {
     return NULL;  /* HTTP 由 root 引擎提供 */
 }
 
+/* ---------- watchdog：引擎崩溃自动重新拉起 ---------- */
+- (void)startWatchdog {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+        while (YES) {
+            if (self.enginePid > 0) {
+                if (kill(self.enginePid, 0) != 0) {
+                    NSLog(@"[AilinTouch] engine dead (pid %d), respawn...", self.enginePid);
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        self.enginePid = [self spawnEngineAsRoot];
+                    });
+                }
+            } else {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    self.enginePid = [self spawnEngineAsRoot];
+                });
+            }
+            usleep(5 * 1000 * 1000);  /* 每 5 秒检查 */
+        }
+    });
+}
+
 /* ---------- App 生命周期 ---------- */
 - (void)refreshStatus {
     NSString *engineStatus = [self forwardToEngine:@"STATUS\n"];
@@ -118,7 +140,8 @@ static void *http_thread(void *arg) {
     pthread_create(&tid, NULL, http_thread, NULL);
     pthread_detach(tid);
 
-    /* 3. 每秒刷新状态 */
+    /* 3. watchdog（引擎崩溃自动拉起）+ 每秒刷新状态 */
+    [self startWatchdog];
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
         [self refreshStatus];
     }];

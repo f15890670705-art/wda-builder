@@ -21,6 +21,7 @@
 
 #define SOCK_PATH "/tmp/ailintouch.sock"
 #define LOG_PATH  "/var/mobile/ailintouch_engine.log"
+#define PID_PATH  "/var/mobile/ailintouch_engine.pid"
 #define HTTP_PORT 8080
 
 static FILE *logfp;
@@ -226,9 +227,29 @@ static void handle_client(int cfd) {
     close(cfd);
 }
 
+/* 杀旧实例：新引擎启动时清掉残留的旧引擎（重装/重开 App 后孤儿进程清理） */
+static void kill_old_instance(void) {
+    FILE *pf = fopen(PID_PATH, "r");
+    if (pf) {
+        int oldpid = 0;
+        if (fscanf(pf, "%d", &oldpid) == 1 && oldpid > 0 && oldpid != getpid()) {
+            if (kill(oldpid, 0) == 0) {  /* 进程仍存活 */
+                kill(oldpid, SIGKILL);
+                usleep(200 * 1000);
+                LOG("killed old engine pid=%d", oldpid);
+            }
+        }
+        fclose(pf);
+    }
+    FILE *wf = fopen(PID_PATH, "w");
+    if (wf) { fprintf(wf, "%d", getpid()); fclose(wf); }
+}
+
 int main(int argc, char *argv[]) {
     logfp = fopen(LOG_PATH, "w");
     LOG("touch_engine start uid=%d", getuid());
+
+    kill_old_instance();  /* 清旧实例 */
 
     if (hid_init() != 0) { LOG("hid_init failed"); return 1; }
 

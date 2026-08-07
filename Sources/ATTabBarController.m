@@ -1,6 +1,6 @@
 //
 // ATTabBarController.m
-// 自定义底部 TabBar（控制面板 / 服务管理）—— 用 SF Symbols 图标
+// 自定义底部 TabBar（控制面板 / 服务管理）—— 子视图堆叠图标+文字
 //
 #import "ATTabBarController.h"
 #import "UITheme.h"
@@ -9,7 +9,9 @@
 @property (nonatomic, strong) NSArray<UIViewController *> *viewControllers;
 @property (nonatomic, strong) NSArray<NSString *> *titles;
 @property (nonatomic, strong) NSArray<NSString *> *symbolNames;
-@property (nonatomic, strong) NSMutableArray<UIButton *> *tabButtons;
+@property (nonatomic, strong) NSMutableArray<UIView *> *tabItemViews;
+@property (nonatomic, strong) NSMutableArray<UIImageView *> *tabIcons;
+@property (nonatomic, strong) NSMutableArray<UILabel *> *tabLabels;
 @property (nonatomic, assign) NSInteger selectedIndex;
 @property (nonatomic, strong) UIView *tabBar;
 @end
@@ -22,7 +24,9 @@
         _titles = titles;
         _symbolNames = symbols;
         _selectedIndex = 0;
-        _tabButtons = [NSMutableArray array];
+        _tabItemViews = [NSMutableArray array];
+        _tabIcons = [NSMutableArray array];
+        _tabLabels = [NSMutableArray array];
     }
     return self;
 }
@@ -61,7 +65,7 @@
     line.backgroundColor = ATDivider();
     [self.tabBar addSubview:line];
 
-    /* 按钮 */
+    /* 每个 Tab 自己占一个 UIStackView 轴上的格子 */
     NSInteger n = self.viewControllers.count;
     UIStackView *stack = [[UIStackView alloc] init];
     stack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -72,27 +76,47 @@
     [self.tabBar addSubview:stack];
 
     for (NSInteger i = 0; i < n; i++) {
-        UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        [b setTitle:self.titles[i] forState:UIControlStateNormal];
-        b.titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
-        b.titleLabel.numberOfLines = 1;
-        b.titleLabel.textAlignment = NSTextAlignmentCenter;
-        b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
-        b.contentVerticalAlignment = UIControlContentVerticalAlignmentCenter;
-        UIImage *img = [self symbolImage:self.symbolNames[i] size:24 color:nil];
-        [b setImage:img forState:UIControlStateNormal];
-        b.tintColor = ATSubText();
-        b.tag = i;
-        [b addTarget:self action:@selector(switchTab:) forControlEvents:UIControlEventTouchUpInside];
-        /* 上下排版：image 在上、title 在下 */
-        CGSize imSize = img.size;
-        CGFloat titleW = [b.titleLabel intrinsicContentSize].width;
-        if (titleW < 50) titleW = 50;
-        CGFloat spacing = 4;
-        b.imageEdgeInsets = UIEdgeInsetsMake(-(titleW/2 + spacing/2), titleW/2 - imSize.width/2, 0, 0);
-        b.titleEdgeInsets = UIEdgeInsetsMake(imSize.height + spacing, -imSize.width, 0, 0);
-        [stack addArrangedSubview:b];
-        [self.tabButtons addObject:b];
+        /* 容器 view 包整块，点击触发 switch */
+        UIControl *containerView = [UIControl new];
+        containerView.translatesAutoresizingMaskIntoConstraints = NO;
+        containerView.tag = i;
+        [containerView addTarget:self action:@selector(switchTab:) forControlEvents:UIControlEventTouchUpInside];
+        [stack addArrangedSubview:containerView];
+        [self.tabItemViews addObject:containerView];
+
+        /* 内部分上图标下文字 */
+        UIStackView *col = [UIStackView new];
+        col.translatesAutoresizingMaskIntoConstraints = NO;
+        col.axis = UILayoutConstraintAxisVertical;
+        col.alignment = UIStackViewAlignmentCenter;
+        col.distribution = UIStackViewDistributionFill;
+        col.spacing = 4;
+        [containerView addSubview:col];
+
+        UIImageView *icon = [UIImageView new];
+        icon.translatesAutoresizingMaskIntoConstraints = NO;
+        icon.contentMode = UIViewContentModeScaleAspectFit;
+        icon.image = [self symbolImage:self.symbolNames[i] size:24 color:ATSubText()];
+        [icon.widthAnchor constraintEqualToConstant:28].active = YES;
+        [icon.heightAnchor constraintEqualToConstant:28].active = YES;
+        [self.tabIcons addObject:icon];
+        [col addArrangedSubview:icon];
+
+        UILabel *label = [UILabel new];
+        label.translatesAutoresizingMaskIntoConstraints = NO;
+        label.text = self.titles[i];
+        label.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+        label.textAlignment = NSTextAlignmentCenter;
+        [self.tabLabels addObject:label];
+        [col addArrangedSubview:label];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [col.centerXAnchor constraintEqualToAnchor:containerView.centerXAnchor],
+            [col.topAnchor     constraintEqualToAnchor:containerView.topAnchor constant:8],
+            [col.bottomAnchor  constraintEqualToAnchor:containerView.bottomAnchor constant:-4],
+            [col.leadingAnchor  constraintGreaterThanOrEqualToAnchor:containerView.leadingAnchor constant:4],
+            [col.trailingAnchor constraintLessThanOrEqualToAnchor:containerView.trailingAnchor constant:-4],
+        ]];
 
         /* 把 VC 的 view 加到 container */
         UIViewController *vc = self.viewControllers[i];
@@ -126,10 +150,10 @@
         [line.trailingAnchor constraintEqualToAnchor:self.tabBar.trailingAnchor],
         [line.heightAnchor   constraintEqualToConstant:0.5],
 
-        [stack.topAnchor      constraintEqualToAnchor:self.tabBar.topAnchor constant:8],
+        [stack.topAnchor      constraintEqualToAnchor:self.tabBar.topAnchor],
         [stack.leadingAnchor  constraintEqualToAnchor:self.tabBar.leadingAnchor],
         [stack.trailingAnchor constraintEqualToAnchor:self.tabBar.trailingAnchor],
-        [stack.bottomAnchor   constraintEqualToAnchor:self.tabBar.bottomAnchor constant:-2],
+        [stack.bottomAnchor   constraintEqualToAnchor:self.tabBar.bottomAnchor],
     ]];
 
     [self setSelectedIndex:0 animated:NO];
@@ -142,16 +166,15 @@
         UIViewController *vc = self.viewControllers[j];
         vc.view.alpha = sel ? 1.0 : 0.0;
         vc.view.userInteractionEnabled = sel;
-        UIButton *b = self.tabButtons[j];
         UIColor *c = sel ? ATBlue() : ATSubText();
-        [b setTitleColor:c forState:UIControlStateNormal];
-        b.tintColor = c;
-        UIImage *img = [self symbolImage:self.symbolNames[j] size:24 color:c];
-        [b setImage:img forState:UIControlStateNormal];
+        UIImageView *icon = self.tabIcons[j];
+        UILabel *label = self.tabLabels[j];
+        icon.image = [self symbolImage:self.symbolNames[j] size:24 color:c];
+        label.textColor = c;
     }
 }
 
-- (void)switchTab:(UIButton *)sender {
+- (void)switchTab:(UIControl *)sender {
     [self setSelectedIndex:sender.tag animated:YES];
 }
 

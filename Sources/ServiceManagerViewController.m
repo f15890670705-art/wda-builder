@@ -43,6 +43,52 @@
 }
 @end
 
+#pragma mark - 设备信息行（key + value）
+
+@interface ATInfoRow : UIView
+@property (nonatomic, strong) UILabel *keyLabel;
+@property (nonatomic, strong) UILabel *valueLabel;
+- (instancetype)initWithKey:(NSString *)key;
+@end
+@implementation ATInfoRow
+- (instancetype)initWithKey:(NSString *)key {
+    if ((self = [super initWithFrame:CGRectZero])) {
+        self.translatesAutoresizingMaskIntoConstraints = NO;
+
+        _keyLabel = [UILabel new];
+        _keyLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        _keyLabel.text = key;
+        _keyLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightRegular];
+        _keyLabel.textColor = ATSubText();
+        _keyLabel.textAlignment = NSTextAlignmentLeft;
+        [self addSubview:_keyLabel];
+
+        _valueLabel = [UILabel new];
+        _valueLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        _valueLabel.text = @"-";
+        _valueLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+        _valueLabel.textColor = ATText();
+        _valueLabel.textAlignment = NSTextAlignmentLeft;
+        _valueLabel.adjustsFontSizeToFitWidth = YES;
+        _valueLabel.minimumScaleFactor = 0.7;
+        [self addSubview:_valueLabel];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [_keyLabel.topAnchor      constraintEqualToAnchor:self.topAnchor],
+            [_keyLabel.leadingAnchor  constraintEqualToAnchor:self.leadingAnchor],
+            [_keyLabel.bottomAnchor   constraintEqualToAnchor:self.bottomAnchor],
+            [_keyLabel.widthAnchor    constraintEqualToConstant:84],
+
+            [_valueLabel.topAnchor    constraintEqualToAnchor:self.topAnchor],
+            [_valueLabel.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+            [_valueLabel.leadingAnchor  constraintEqualToAnchor:_keyLabel.trailingAnchor constant:8],
+            [_valueLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+        ]];
+    }
+    return self;
+}
+@end
+
 
 #pragma mark - ServiceManagerViewController
 
@@ -61,10 +107,10 @@
 @property (nonatomic, strong) UIButton  *refreshIpBtn;
 @property (nonatomic, strong) UILabel   *portText;
 
-@property (nonatomic, strong) UILabel   *devName;
-@property (nonatomic, strong) UILabel   *devOS;
-@property (nonatomic, strong) UILabel   *devModel;
-@property (nonatomic, strong) UILabel   *devScreen;
+@property (nonatomic, strong) ATInfoRow *devName;
+@property (nonatomic, strong) ATInfoRow *devOS;
+@property (nonatomic, strong) ATInfoRow *devModel;
+@property (nonatomic, strong) ATInfoRow *devScreen;
 
 @property (nonatomic, strong) UIButton  *startBtn;
 @property (nonatomic, strong) UIButton  *stopBtn;
@@ -187,11 +233,18 @@
     [self.cardStatus addSubview:line];
 
     /* IP 行 */
+    UILabel *ipLabel = [UILabel new];
+    ipLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    ipLabel.text = @"本地 IP";
+    ipLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightRegular];
+    ipLabel.textColor = ATSubText();
+    [self.cardStatus addSubview:ipLabel];
+
     self.ipText = [UILabel new];
     self.ipText.translatesAutoresizingMaskIntoConstraints = NO;
-    self.ipText.text = @"IP: -";
+    self.ipText.text = @"-";
     self.ipText.textColor = ATText();
-    self.ipText.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    self.ipText.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
     [self.cardStatus addSubview:self.ipText];
 
     self.refreshIpBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -236,13 +289,18 @@
         [line.trailingAnchor constraintEqualToAnchor:self.cardStatus.trailingAnchor constant:-16],
         [line.heightAnchor   constraintEqualToConstant:1],
 
-        [self.ipText.topAnchor     constraintEqualToAnchor:line.bottomAnchor constant:14],
-        [self.ipText.leadingAnchor constraintEqualToAnchor:self.cardStatus.leadingAnchor constant:16],
+        [ipLabel.topAnchor     constraintEqualToAnchor:line.bottomAnchor constant:14],
+        [ipLabel.leadingAnchor constraintEqualToAnchor:self.cardStatus.leadingAnchor constant:16],
+        [ipLabel.widthAnchor   constraintEqualToConstant:84],
 
-        [self.refreshIpBtn.centerYAnchor constraintEqualToAnchor:self.ipText.centerYAnchor],
+        [self.ipText.topAnchor     constraintEqualToAnchor:ipLabel.topAnchor],
+        [self.ipText.leadingAnchor constraintEqualToAnchor:ipLabel.trailingAnchor constant:8],
+        [self.ipText.trailingAnchor constraintLessThanOrEqualToAnchor:self.refreshIpBtn.leadingAnchor constant:-8],
+
+        [self.refreshIpBtn.centerYAnchor constraintEqualToAnchor:ipLabel.centerYAnchor],
         [self.refreshIpBtn.trailingAnchor constraintEqualToAnchor:self.cardStatus.trailingAnchor constant:-16],
 
-        [self.portText.topAnchor     constraintEqualToAnchor:self.ipText.bottomAnchor constant:8],
+        [self.portText.topAnchor     constraintEqualToAnchor:ipLabel.bottomAnchor constant:8],
         [self.portText.leadingAnchor constraintEqualToAnchor:self.cardStatus.leadingAnchor constant:16],
         [self.portText.bottomAnchor  constraintEqualToAnchor:self.cardStatus.bottomAnchor constant:-16],
     ]];
@@ -252,10 +310,10 @@
     ATChipBadge *badge = [ATChipBadge badgeWithText:@"  设备信息  " fg:ATGreen() bg:ATGreenBg()];
     [self.cardDevice addSubview:badge];
 
-    self.devName   = [self buildRowLabel];
-    self.devOS     = [self buildRowLabel];
-    self.devModel  = [self buildRowLabel];
-    self.devScreen = [self buildRowLabel];
+    self.devName   = [[ATInfoRow alloc] initWithKey:@"设备名称"];
+    self.devOS     = [[ATInfoRow alloc] initWithKey:@"系统版本"];
+    self.devModel  = [[ATInfoRow alloc] initWithKey:@"设备型号"];
+    self.devScreen = [[ATInfoRow alloc] initWithKey:@"屏幕尺寸"];
     [self.cardDevice addSubview:self.devName];
     [self.cardDevice addSubview:self.devOS];
     [self.cardDevice addSubview:self.devModel];
@@ -268,26 +326,25 @@
 
         [self.devName.topAnchor     constraintEqualToAnchor:badge.bottomAnchor constant:14],
         [self.devName.leadingAnchor constraintEqualToAnchor:self.cardDevice.leadingAnchor constant:16],
-        [self.devName.trailingAnchor constraintLessThanOrEqualToAnchor:self.cardDevice.trailingAnchor constant:-16],
+        [self.devName.trailingAnchor constraintEqualToAnchor:self.cardDevice.trailingAnchor constant:-16],
+        [self.devName.heightAnchor  constraintEqualToConstant:24],
 
         [self.devOS.topAnchor     constraintEqualToAnchor:self.devName.bottomAnchor constant:10],
+        [self.devOS.leadingAnchor constraintEqualToAnchor:self.cardDevice.leadingAnchor constant:16],
+        [self.devOS.trailingAnchor constraintEqualToAnchor:self.cardDevice.trailingAnchor constant:-16],
+        [self.devOS.heightAnchor  constraintEqualToConstant:24],
 
         [self.devModel.topAnchor     constraintEqualToAnchor:self.devOS.bottomAnchor constant:10],
+        [self.devModel.leadingAnchor constraintEqualToAnchor:self.cardDevice.leadingAnchor constant:16],
+        [self.devModel.trailingAnchor constraintEqualToAnchor:self.cardDevice.trailingAnchor constant:-16],
+        [self.devModel.heightAnchor  constraintEqualToConstant:24],
 
         [self.devScreen.topAnchor     constraintEqualToAnchor:self.devModel.bottomAnchor constant:10],
+        [self.devScreen.leadingAnchor constraintEqualToAnchor:self.cardDevice.leadingAnchor constant:16],
+        [self.devScreen.trailingAnchor constraintEqualToAnchor:self.cardDevice.trailingAnchor constant:-16],
+        [self.devScreen.heightAnchor  constraintEqualToConstant:24],
         [self.devScreen.bottomAnchor  constraintEqualToAnchor:self.cardDevice.bottomAnchor constant:-16],
     ]];
-
-    [[self.devOS.leadingAnchor constraintEqualToAnchor:self.cardDevice.leadingAnchor constant:16] setActive:YES];
-    [[self.devModel.leadingAnchor constraintEqualToAnchor:self.cardDevice.leadingAnchor constant:16] setActive:YES];
-}
-
-- (UILabel *)buildRowLabel {
-    UILabel *l = [UILabel new];
-    l.translatesAutoresizingMaskIntoConstraints = NO;
-    l.font = [UIFont systemFontOfSize:14 weight:UIFontWeightRegular];
-    l.textColor = ATText();
-    return l;
 }
 
 - (void)buildCardControl {
@@ -385,15 +442,15 @@
     self.statusDot.backgroundColor = running ? ATGreen() : ATRed();
 
     self.versionText.text = [NSString stringWithFormat:@"版本: %@", self.serviceVersion ?: @"-"];
-    self.ipText.text = [NSString stringWithFormat:@"IP: %@", self.localIP ?: @"-"];
+    self.ipText.text = self.localIP ?: @"-";
 
     NSString *port = self.httpPort > 0 ? [NSString stringWithFormat:@"HTTP 服务端口: %ld", (long)self.httpPort] : @"HTTP 服务端口: -";
     self.portText.text = port;
 
-    self.devName.text   = [NSString stringWithFormat:@"设备名称:   %@", self.deviceName  ?: @"-"];
-    self.devOS.text     = [NSString stringWithFormat:@"系统版本:   %@", self.deviceOS    ?: @"-"];
-    self.devModel.text  = [NSString stringWithFormat:@"设备型号:   %@", self.deviceModel ?: @"-"];
-    self.devScreen.text = [NSString stringWithFormat:@"屏幕尺寸:   %@", self.screenSize  ?: @"-"];
+    self.devName.valueLabel.text   = self.deviceName  ?: @"-";
+    self.devOS.valueLabel.text     = self.deviceOS    ?: @"-";
+    self.devModel.valueLabel.text  = self.deviceModel ?: @"-";
+    self.devScreen.valueLabel.text = self.screenSize  ?: @"-";
 }
 
 - (void)setServiceState:(NSString *)s { _serviceState = [s copy]; [self refreshAll]; }

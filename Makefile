@@ -40,7 +40,9 @@ build:
 	$(CC) $(CFLAGS) $(LDFLAGS) $(APP_SOURCES) -o $(APP_DIR)/$(APP_NAME)
 	$(CC) $(CFLAGS) $(ENGINE_SOURCE) -o $(APP_DIR)/touch_engine
 	@cp Resources/Info.plist $(APP_DIR)/Info.plist
-	@echo "== build done (App + touch_engine) =="
+	# 复制 AppIcon PNG（Info.plist 用 CFBundleIconFiles 引用 AppIcon60x60 / AppIcon76x76 名字）
+	@cp -R Resources/AppIcon/*.png $(APP_DIR)/
+	@echo "== build done (App + touch_engine + icons) =="
 
 sign:
 	@echo "== signing App =="

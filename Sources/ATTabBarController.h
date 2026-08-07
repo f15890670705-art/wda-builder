@@ -5,5 +5,7 @@
 #import <UIKit/UIKit.h>
 
 @interface ATTabBarController : UIViewController
-- (instancetype)initWithViewControllers:(NSArray<UIViewController *> *)vcs titles:(NSArray<NSString *> *)titles;
+- (instancetype)initWithViewControllers:(NSArray<UIViewController *> *)vcs
+                                 titles:(NSArray<NSString *> *)titles
+                                symbols:(NSArray<NSString *> *)symbols;
 @end

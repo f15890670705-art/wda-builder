@@ -208,7 +208,8 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 
     self.tabBar = [[ATTabBarController alloc]
         initWithViewControllers:@[self.controlVC, self.serviceVC]
-                        titles:@[@"控制面板", @"服务管理"]];
+                        titles:@[@"控制面板", @"服务管理"]
+                       symbols:@[@"house.fill", @"gearshape.fill"]];
 
     self.nav = [[UINavigationController alloc] initWithRootViewController:self.tabBar];
     self.nav.navigationBar.hidden = YES;     /* 自绘标题 */

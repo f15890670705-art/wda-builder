@@ -91,6 +91,7 @@
         col.alignment = UIStackViewAlignmentCenter;
         col.distribution = UIStackViewDistributionFill;
         col.spacing = 4;
+        col.userInteractionEnabled = NO;     /* 不吃 hitTest，让 UIControl 接收 */
         [containerView addSubview:col];
 
         UIImageView *icon = [UIImageView new];

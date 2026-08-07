@@ -14,12 +14,14 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <netinet/in.h>
 #include <dispatch/dispatch.h>
 #include <mach/mach_time.h>
 #include <CoreFoundation/CoreFoundation.h>
 
 #define SOCK_PATH "/tmp/ailintouch.sock"
 #define LOG_PATH  "/var/mobile/ailintouch_engine.log"
+#define HTTP_PORT 8080
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -174,12 +176,41 @@ static void do_swipe(float x1, float y1, float x2, float y2, int ms) {
 }
 
 static void handle_client(int cfd) {
-    char buf[256] = {0};
+    char buf[512] = {0};
     ssize_t n = read(cfd, buf, sizeof(buf)-1);
     if (n <= 0) { close(cfd); return; }
+
+    char reply[256];
+    /* HTTP 请求：GET /tap?x=..&y=.. HTTP/1.1 */
+    if (strncmp(buf, "GET ", 4) == 0) {
+        char path[256] = {0};
+        sscanf(buf, "GET %255s", path);
+        float a=0,b=0,c=0,d=0; int ms=300;
+        if (strncmp(path, "/tap", 4) == 0) {
+            sscanf(path, "/tap?x=%f&y=%f", &a, &b);
+            do_tap(a,b);
+            snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"ok\":true}");
+        } else if (strncmp(path, "/swipe", 6) == 0) {
+            sscanf(path, "/swipe?x1=%f&y1=%f&x2=%f&y2=%f&ms=%d", &a,&b,&c,&d,&ms);
+            do_swipe(a,b,c,d,ms);
+            snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"ok\":true}");
+        } else if (strncmp(path, "/status", 7) == 0) {
+            uint64_t s = g_sender_id ? g_sender_id : g_fallback_sender;
+            snprintf(reply, sizeof(reply),
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 200\r\nConnection: close\r\n\r\n"
+                "{\"engine\":\"root ready\",\"senderid\":\"%llx\",\"fallback\":\"%llx\",\"seq\":%d}",
+                (unsigned long long)g_sender_id, (unsigned long long)s, g_seq);
+        } else {
+            snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{\"ok\":false}");
+        }
+        write(cfd, reply, strlen(reply));
+        close(cfd);
+        return;
+    }
+
+    /* 文本命令：TAP x y\n */
     char cmd[16] = {0}; float a=0,b=0,c=0,d=0; int ms=300;
     sscanf(buf, "%15s %f %f %f %f %d", cmd, &a, &b, &c, &d, &ms);
-    char reply[160];
     if (strcmp(cmd, "TAP") == 0 && n > 4) { do_tap(a,b); snprintf(reply, sizeof(reply), "OK\n"); }
     else if (strcmp(cmd, "SWIPE") == 0) { do_swipe(a,b,c,d,ms); snprintf(reply, sizeof(reply), "OK\n"); }
     else if (strcmp(cmd, "DOWN") == 0) { send_digitizer(a,b,1); snprintf(reply, sizeof(reply), "OK\n"); }
@@ -218,6 +249,26 @@ int main(int argc, char *argv[]) {
     });
     dispatch_resume(src);
     LOG("listening on %s (GCD main queue)", SOCK_PATH);
+
+    /* TCP HTTP 监听 8080 —— root 进程常驻，App 后台/被杀也不影响 */
+    int tcp_fd = socket(AF_INET, SOCK_STREAM, 0);
+    int on = 1;
+    setsockopt(tcp_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    struct sockaddr_in taddr = {0};
+    taddr.sin_family = AF_INET;
+    taddr.sin_port = htons(HTTP_PORT);
+    taddr.sin_addr.s_addr = INADDR_ANY;
+    bind(tcp_fd, (struct sockaddr*)&taddr, sizeof(taddr));
+    listen(tcp_fd, 8);
+
+    dispatch_source_t tcp_src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ,
+        (dispatch_fd_t)tcp_fd, 0, dispatch_get_main_queue());
+    dispatch_source_set_event_handler(tcp_src, ^{
+        int cfd = accept(tcp_fd, NULL, NULL);
+        if (cfd >= 0) handle_client(cfd);
+    });
+    dispatch_resume(tcp_src);
+    LOG("HTTP listening on :%d (root)", HTTP_PORT);
 
     /* HID client 已在 hid_init 里 Schedule 到 main runloop；启动 runloop 驱动它 */
     CFRunLoopRun();

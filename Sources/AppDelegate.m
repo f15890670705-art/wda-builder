@@ -76,66 +76,11 @@ extern int posix_spawnattr_set_persona_groups_np(const posix_spawnattr_t *, int,
     return [NSString stringWithUTF8String:buf];
 }
 
-/* ---------- HTTP ---------- */
-static void send_response(int fd, const char *body) {
-    char buf[1024];
-    int len = snprintf(buf, sizeof(buf),
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: application/json\r\n"
-        "Content-Length: %zu\r\n"
-        "Connection: close\r\n"
-        "\r\n%s", strlen(body), body);
-    write(fd, buf, len);
-    close(fd);
-}
-
-static void handle_request(int fd, const char *req) {
-    char method[16] = {0}, path[512] = {0};
-    sscanf(req, "%15s %511s", method, path);
-
-    char body[256] = {0};
-    if (strncmp(path, "/tap", 4) == 0) {
-        float x = 0, y = 0;
-        sscanf(path, "/tap?x=%f&y=%f", &x, &y);
-        NSString *r = [g_delegate forwardToEngine:[NSString stringWithFormat:@"TAP %.1f %.1f\n", x, y]];
-        snprintf(body, sizeof(body), "{\"ok\":%d,\"engine\":\"%s\"}", [r hasPrefix:@"OK"], [r UTF8String]);
-    }
-    else if (strncmp(path, "/swipe", 6) == 0) {
-        float x1=0,y1=0,x2=0,y2=0; int ms=300;
-        sscanf(path, "/swipe?x1=%f&y1=%f&x2=%f&y2=%f&ms=%d", &x1,&y1,&x2,&y2,&ms);
-        NSString *r = [g_delegate forwardToEngine:[NSString stringWithFormat:@"SWIPE %.1f %.1f %.1f %.1f %d\n", x1,y1,x2,y2,ms]];
-        snprintf(body, sizeof(body), "{\"ok\":%d}", [r hasPrefix:@"OK"]);
-    }
-    else if (strncmp(path, "/status", 7) == 0) {
-        NSString *r = [g_delegate forwardToEngine:@"STATUS\n"];
-        snprintf(body, sizeof(body), "{\"engine\":\"%s\"}", [r UTF8String]);
-    }
-    else {
-        snprintf(body, sizeof(body), "{\"ok\":false,\"error\":\"unknown\"}");
-    }
-    send_response(fd, body);
-}
+/* ---------- HTTP（已移到 root touch_engine :8080，App 不再监听避免冲突） ---------- */
 
 static void *http_thread(void *arg) {
-    int sfd = socket(AF_INET, SOCK_STREAM, 0);
-    int on = 1;
-    setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-    struct sockaddr_in addr = {0};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(SERVER_PORT);
-    addr.sin_addr.s_addr = INADDR_ANY;
-    if (bind(sfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(sfd); return NULL; }
-    if (listen(sfd, 8) < 0) { close(sfd); return NULL; }
-
-    for (;;) {
-        int cfd = accept(sfd, NULL, NULL);
-        if (cfd < 0) continue;
-        char req[2048] = {0};
-        ssize_t n = read(cfd, req, sizeof(req) - 1);
-        if (n > 0) handle_request(cfd, req);
-        else close(cfd);
-    }
-    return NULL;
+    (void)arg;
+    return NULL;  /* HTTP 由 root 引擎提供 */
 }
 
 /* ---------- App 生命周期 ---------- */

@@ -44,7 +44,6 @@ static AppDelegate *g_delegate;
 @property (nonatomic, strong) ControlPanelViewController *controlVC;
 @property (nonatomic, strong) ServiceManagerViewController *serviceVC;
 @property (nonatomic, assign) pid_t enginePid;
-@property (nonatomic, assign) BOOL  engineStopped;   /* 用户手动停止后 watchdog 不再复活 */
 @property (nonatomic, strong) NSString *cachedIP;
 @end
 
@@ -131,18 +130,15 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     unlink([ENGINE_STOPPED UTF8String]);
     if ([self engineAlive]) {
         NSLog(@"[AilinTouch] startService: already running");
-        self.engineStopped = NO;
         return;
     }
     NSLog(@"[AilinTouch] startService: starting...");
-    self.engineStopped = NO;
     self.enginePid = [self spawnEngineAsRoot];
     NSLog(@"[AilinTouch] startService done, alive=%d", [self engineAlive]);
 }
 
 /* 停止服务：root 引擎收到 SHUTDOWN 后自己 launchctl unload + 退出 */
 - (void)stopEngine {
-    self.engineStopped = YES;   /* 通知 watchdog 不要复活 */
     NSString *r = [self forwardToEngine:@"SHUTDOWN\n"];
     NSLog(@"[AilinTouch] shutdown reply: %@", r);
     /* 兜底 kill（若引擎没回 SHUTDOWN） */
@@ -275,7 +271,6 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 
     /* 1. 拉起引擎（若上次手动停止过，尊重用户选择：不自动拉起） */
     if ([[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED]) {
-        self.engineStopped = YES;   /* 保持停止态，watchdog 不复活 */
         NSLog(@"[AilinTouch] stopped marker present, engine stays down");
     } else {
         self.enginePid = [self spawnEngineAsRoot];
@@ -286,19 +281,6 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [self refreshStatus];
     }];
     [self refreshStatus];
-
-    /* 3. watchdog — 引擎意外死了 5 秒重起（用户手动停止后不复活） */
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
-        while (YES) {
-            if (![self engineAlive] && !self.engineStopped) {
-                NSLog(@"[AilinTouch] watchdog: engine 8080 down, re-spawn");
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    self.enginePid = [self spawnEngineAsRoot];
-                });
-            }
-            usleep(5 * 1000 * 1000);
-        }
-    });
 
     return YES;
 }

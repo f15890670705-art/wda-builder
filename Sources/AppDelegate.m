@@ -139,36 +139,45 @@ static void *http_thread(void *arg) {
 }
 
 /* ---------- App 生命周期 ---------- */
+- (void)refreshStatus {
+    NSString *engineStatus = [self forwardToEngine:@"STATUS\n"];
+    NSString *ver = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+    self.statusLabel.text = [NSString stringWithFormat:
+        @"AilinTouch v%@\n\n"
+        @"engine pid: %d\n"
+        @"HTTP: :%d\n"
+        @"%@\n"
+        @"\n命令: tap?x=..&y=..",
+        ver, self.enginePid, SERVER_PORT, [engineStatus stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]];
+}
+
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     g_delegate = self;
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    self.window.backgroundColor = [UIColor whiteColor];
     self.window.rootViewController = [[UIViewController alloc] init];
+    self.window.rootViewController.view.backgroundColor = [UIColor whiteColor];
 
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 80, 340, 100)];
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 100, 340, 400)];
     self.statusLabel.numberOfLines = 0;
-    self.statusLabel.font = [UIFont systemFontOfSize:13];
+    self.statusLabel.textColor = [UIColor blackColor];
+    self.statusLabel.font = [UIFont boldSystemFontOfSize:18];
     [self.window.rootViewController.view addSubview:self.statusLabel];
     [self.window makeKeyAndVisible];
 
     /* 1. 以 root 拉起引擎 */
     self.enginePid = [self spawnEngineAsRoot];
-    if (self.enginePid > 0) {
-        /* 等引擎就绪 */
-        for (int i = 0; i < 20; i++) {
-            NSString *r = [self forwardToEngine:@"STATUS\n"];
-            if ([r hasPrefix:@"engine"]) break;
-            usleep(200 * 1000);
-        }
-    }
-
-    self.statusLabel.text = [NSString stringWithFormat:
-        @"AilinTouch\nengine pid=%d\nHTTP :%d\n首次点击前请先手动触摸屏幕一次",
-        self.enginePid, SERVER_PORT];
 
     /* 2. HTTP 服务 */
     pthread_t tid;
     pthread_create(&tid, NULL, http_thread, NULL);
     pthread_detach(tid);
+
+    /* 3. 每秒刷新状态 */
+    [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
+        [self refreshStatus];
+    }];
+    [self refreshStatus];
 
     return YES;
 }

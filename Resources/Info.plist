@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>2.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MinimumOSVersion</key>
@@ -37,16 +37,12 @@
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
 
-	<!-- ========== TrollStore 后台常驻配置（Ailin 同款） ========== -->
+	<!-- ========== 后台常驻（保留常驻，去掉界面隐藏） ========== -->
 	<key>SBAppIsDaemon</key>
-	<true/>
-	<key>HideAtLaunch</key>
 	<true/>
 	<key>SpringBoard</key>
 	<dict>
 		<key>Background</key>
-		<true/>
-		<key>Hide</key>
 		<true/>
 		<key>LaunchAtBoot</key>
 		<true/>

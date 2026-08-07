@@ -1,32 +1,55 @@
+//
+// AppDelegate.m — AilinTouch（v8.0 UI 重写）
+//
+//  卡片式 UI：顶部标题 + 服务状态/设备信息/服务控制 三张卡片
+//  底部 TabBar：控制面板 / 服务管理
+//  引擎：spawn root touch_engine，HTTP :8080 (应用层 watchdog)
+//
 #import "AppDelegate.h"
+#import "ATTabBarController.h"
+#import "ControlPanelViewController.h"
+#import "ServiceManagerViewController.h"
+#import "FileViewerViewController.h"
 #import <sys/socket.h>
 #import <sys/un.h>
 #import <sys/stat.h>
 #import <netinet/in.h>
+#import <netinet/tcp.h>
+#import <arpa/inet.h>
+#import <ifaddrs.h>
 #import <spawn.h>
 #import <pthread.h>
 #import <dlfcn.h>
 #import <signal.h>
 
-#define SERVER_PORT 8080
-#define ENGINE_SOCK "/tmp/ailintouch.sock"
+#define SERVER_PORT       8080
+#define ENGINE_SOCK       "/tmp/ailintouch.sock"
+#define ENGINE_PID_PATH   "/var/mobile/ailintouch_engine.pid"
+#define ENGINE_LOG_PATH   "/var/mobile/ailintouch_engine.log"
 
 extern char **environ;
-
 static AppDelegate *g_delegate;
 
-@interface AppDelegate ()
-@property (nonatomic, strong) UILabel *statusLabel;
+#pragma mark - AppDelegate
+
+@interface AppDelegate () <UINavigationControllerDelegate>
+@property (nonatomic, strong) UIWindow *window;
+@property (nonatomic, strong) UINavigationController *nav;
+@property (nonatomic, strong) ATTabBarController *tabBar;
+@property (nonatomic, strong) ControlPanelViewController *controlVC;
+@property (nonatomic, strong) ServiceManagerViewController *serviceVC;
+
 @property (nonatomic, assign) pid_t enginePid;
+@property (nonatomic, strong) NSString *cachedIP;
 @end
 
 @implementation AppDelegate
 
-/* ---------- root spawn（Ailin 同款：persona 99 + uid 0） ---------- */
+#pragma mark root spawn
+
 extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *, int, uid_t);
 extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *, uid_t);
 extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
-extern int posix_spawnattr_set_persona_groups_np(const posix_spawnattr_t *, int, gid_t *);
 
 - (pid_t)spawnEngineAsRoot {
     NSString *bundlePath = [[NSBundle mainBundle] resourcePath];
@@ -38,25 +61,23 @@ extern int posix_spawnattr_set_persona_groups_np(const posix_spawnattr_t *, int,
 
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
-    posix_spawnattr_set_persona_np(&attr, 99, 0);          /* persona 99 (root) */
+    posix_spawnattr_set_persona_np(&attr, 99, 0);
     posix_spawnattr_set_persona_uid_np(&attr, 0);
     posix_spawnattr_set_persona_gid_np(&attr, 0);
-    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | 0x100 /*POSIX_SPAWN_SET_PERSONA*/);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | 0x100);
 
     pid_t pid = 0;
     char *argv[] = {(char *)[enginePath UTF8String], NULL};
     int rc = posix_spawn(&pid, [enginePath UTF8String], NULL, &attr, argv, environ);
     posix_spawnattr_destroy(&attr);
 
-    if (rc != 0) {
-        NSLog(@"[AilinTouch] spawn engine failed: %s (%d)", strerror(rc), rc);
-        return -1;
-    }
-    NSLog(@"[AilinTouch] engine spawned pid=%d", pid);
+    if (rc != 0) { NSLog(@"[AilinTouch] spawn failed: %s", strerror(rc)); return -1; }
+    NSLog(@"[AilinTouch] engine spawn pid=%d", pid);
     return pid;
 }
 
-/* ---------- 命令转发到引擎 socket ---------- */
+#pragma mark Unix socket
+
 - (NSString *)forwardToEngine:(NSString *)cmd {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return @"ERR socket";
@@ -77,83 +98,192 @@ extern int posix_spawnattr_set_persona_groups_np(const posix_spawnattr_t *, int,
     return [NSString stringWithUTF8String:buf];
 }
 
-/* ---------- HTTP（已移到 root touch_engine :8080，App 不再监听避免冲突） ---------- */
+#pragma mark 引擎通断
 
-static void *http_thread(void *arg) {
-    (void)arg;
-    return NULL;  /* HTTP 由 root 引擎提供 */
-}
-
-/* ---------- watchdog：检查引擎 8080，不通则重新安装拉起（launchd 负责常驻） ---------- */
 - (BOOL)engineAlive {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return NO;
     struct sockaddr_in a = {0};
     a.sin_family = AF_INET;
-    a.sin_port = htons(8080);
+    a.sin_port = htons(SERVER_PORT);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    struct timeval tv = { .tv_sec = 0, .tv_usec = 200 * 1000 };
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     int ok = (connect(fd, (struct sockaddr*)&a, sizeof(a)) == 0);
     close(fd);
     return ok;
 }
 
-- (void)startWatchdog {
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
-        while (YES) {
-            if (![self engineAlive]) {
-                NSLog(@"[AilinTouch] engine 8080 down, reinstall+spawn...");
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    self.enginePid = [self spawnEngineAsRoot];
-                });
-            }
-            usleep(5 * 1000 * 1000);  /* 每 5 秒检查 */
-        }
-    });
+- (void)ensureEngine {
+    if ([self engineAlive]) return;
+    NSLog(@"[AilinTouch] engine down, spawning...");
+    self.enginePid = [self spawnEngineAsRoot];
 }
 
-/* ---------- App 生命周期 ---------- */
-- (void)refreshStatus {
-    NSString *engineStatus = [self forwardToEngine:@"STATUS\n"];
-    NSString *ver = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
-    self.statusLabel.text = [NSString stringWithFormat:
-        @"AilinTouch v%@\n\n"
-        @"engine pid: %d\n"
-        @"HTTP: :%d\n"
-        @"%@\n"
-        @"\n命令: tap?x=..&y=..",
-        ver, self.enginePid, SERVER_PORT, [engineStatus stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]];
+- (void)stopEngine {
+    /* 先 try unix socket SHUTDOWN */
+    [self forwardToEngine:@"SHUTDOWN\n"];
+    /* 再读 pid 文件 kill */
+    FILE *pf = fopen([ENGINE_PID_PATH UTF8String], "r");
+    if (pf) {
+        int pid = 0;
+        if (fscanf(pf, "%d", &pid) == 1 && pid > 0) {
+            if (kill(pid, 0) == 0) {
+                kill(pid, SIGKILL);
+                NSLog(@"[AilinTouch] killed engine pid=%d", pid);
+                /* launchd KeepAlive 会自动拉起，等几秒就回来 */
+            }
+        }
+        fclose(pf);
+    }
 }
+
+#pragma mark IP
+
+- (NSString *)currentWifiIP {
+    struct ifaddrs *addrs = NULL;
+    if (getifaddrs(&addrs) != 0) return nil;
+    NSString *result = nil;
+    for (struct ifaddrs *p = addrs; p; p = p->ifa_next) {
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
+        if (!(p->ifa_flags & IFF_UP) || (p->ifa_flags & IFF_LOOPBACK)) continue;
+        NSString *name = [NSString stringWithUTF8String:p->ifa_name];
+        if (![name hasPrefix:@"en"]) continue; /* en0 = wifi, en1 = 多网 */
+        char buf[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &((struct sockaddr_in*)p->ifa_addr)->sin_addr, buf, sizeof(buf));
+        NSString *ip = [NSString stringWithUTF8String:buf];
+        if (![ip isEqualToString:@"0.0.0.0"] && ![ip hasPrefix:@"169.254."]) {
+            result = ip;
+            break;
+        }
+    }
+    freeifaddrs(addrs);
+    return result;
+}
+
+#pragma mark 设备信息
+
+- (NSDictionary *)collectDeviceInfo {
+    NSMutableDictionary *d = [NSMutableDictionary new];
+
+    /* 设备名 */
+    NSString *name = [[UIDevice currentDevice] name] ?: @"-";
+    [d setObject:name forKey:@"name"];
+
+    /* iOS 版本 */
+    NSString *ver = [[UIDevice currentDevice] systemVersion] ?: @"-";
+    [d setObject:ver forKey:@"os"];
+
+    /* 机型 — sysctl hw.machine */
+    size_t sz = 0;
+    sysctlbyname("hw.machine", NULL, &sz, NULL, 0);
+    char *m = malloc(sz + 1);
+    if (m) {
+        sysctlbyname("hw.machine", m, &sz, NULL, 0);
+        m[sz] = 0;
+        [d setObject:[NSString stringWithUTF8String:m] forKey:@"machine"];
+        free(m);
+    } else [d setObject:@"-" forKey:@"machine"];
+
+    /* 屏幕 */
+    CGSize sz1 = [UIScreen mainScreen].bounds.size;
+    CGFloat scale = [UIScreen mainScreen].scale;
+    [d setObject:[NSString stringWithFormat:@"%.0fx%.0f (@%.0fx)",
+                   sz1.width, sz1.height, scale] forKey:@"screen"];
+
+    return d;
+}
+
+#pragma mark UI 构建
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     g_delegate = self;
+
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     self.window.backgroundColor = [UIColor whiteColor];
-    self.window.rootViewController = [[UIViewController alloc] init];
-    self.window.rootViewController.view.backgroundColor = [UIColor whiteColor];
 
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 100, 340, 400)];
-    self.statusLabel.numberOfLines = 0;
-    self.statusLabel.textColor = [UIColor blackColor];
-    self.statusLabel.font = [UIFont boldSystemFontOfSize:18];
-    [self.window.rootViewController.view addSubview:self.statusLabel];
+    /* 两个 Tab 页 */
+    self.controlVC  = [ControlPanelViewController new];
+    self.serviceVC  = [ServiceManagerViewController new];
+
+    self.tabBar = [[ATTabBarController alloc]
+        initWithViewControllers:@[self.controlVC, self.serviceVC]
+                        titles:@[@"控制面板", @"服务管理"]];
+
+    self.nav = [[UINavigationController alloc] initWithRootViewController:self.tabBar];
+    self.nav.navigationBar.hidden = YES;     /* 自绘标题 */
+    self.window.rootViewController = self.nav;
     [self.window makeKeyAndVisible];
 
-    /* 1. 以 root 拉起引擎 */
+    /* 按钮回调 */
+    __weak typeof(self) ws = self;
+    self.serviceVC.onTapStart        = ^{ [ws ensureEngine]; };
+    self.serviceVC.onTapStop         = ^{ [ws stopEngine];  };
+    self.serviceVC.onTapRefreshStatus= ^{ [ws refreshStatus];};
+    self.serviceVC.onTapRefreshIP    = ^{
+        ws.cachedIP = [ws currentWifiIP] ?: @"无 WiFi";
+        ws.serviceVC.localIP = ws.cachedIP;
+        ws.controlVC.localIP = ws.cachedIP;
+        [ws refreshStatus];
+    };
+    self.serviceVC.onTapLogDir = ^{
+        UIViewController *vc = [[FileViewerViewController alloc]
+            initWithTitle:@"日志目录" path:ENGINE_LOG_PATH showTail:NO];
+        [ws.nav pushViewController:vc animated:YES];
+    };
+    self.serviceVC.onTapWorkDir = ^{
+        UIViewController *vc = [[FileViewerViewController alloc]
+            initWithTitle:@"工作目录" path:@"/var/mobile/" showTail:NO];
+        [ws.nav pushViewController:vc animated:YES];
+    };
+
+    /* 1. 拉起引擎 */
     self.enginePid = [self spawnEngineAsRoot];
 
-    /* 2. HTTP 服务 */
-    pthread_t tid;
-    pthread_create(&tid, NULL, http_thread, NULL);
-    pthread_detach(tid);
-
-    /* 3. watchdog（引擎崩溃自动拉起）+ 每秒刷新状态 */
-    [self startWatchdog];
+    /* 2. 每秒刷新状态 */
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
         [self refreshStatus];
     }];
     [self refreshStatus];
 
+    /* 3. watchdog — 引擎死了 5 秒重起 */
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+        while (YES) {
+            if (![self engineAlive] && self.enginePid > 0) {
+                NSLog(@"[AilinTouch] watchdog: engine 8080 down, re-spawn");
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    self.enginePid = [self spawnEngineAsRoot];
+                });
+            }
+            usleep(5 * 1000 * 1000);
+        }
+    });
+
     return YES;
+}
+
+#pragma mark 状态刷新
+
+- (void)refreshStatus {
+    BOOL alive = [self engineAlive];
+    NSString *state = alive ? @"已启动" : @"已停止";
+    NSString *ver = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-";
+    NSString *ip = self.cachedIP ?: ([self currentWifiIP] ?: @"未连接");
+    if (!self.cachedIP) self.cachedIP = ip;
+
+    NSDictionary *dev = [self collectDeviceInfo];
+
+    self.serviceVC.serviceState  = state;
+    self.serviceVC.serviceVersion = ver;
+    self.serviceVC.localIP       = ip;
+    self.serviceVC.httpPort      = SERVER_PORT;
+    self.serviceVC.deviceName    = dev[@"name"];
+    self.serviceVC.deviceOS      = [NSString stringWithFormat:@"iOS %@", dev[@"os"]];
+    self.serviceVC.deviceModel   = dev[@"machine"];
+    self.serviceVC.screenSize    = dev[@"screen"];
+
+    self.controlVC.localIP = ip;
+    self.controlVC.httpPort = SERVER_PORT;
 }
 
 @end

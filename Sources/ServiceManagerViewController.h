@@ -8,7 +8,8 @@
 
 /* 提供给外部 UI 刷新的数据 source */
 @property (nonatomic, copy) NSString *serviceState;    // @"已启动" / @"已停止"
-@property (nonatomic, copy) NSString *serviceVersion;
+@property (nonatomic, copy) NSString *serviceVersion;  // 引擎版本
+@property (nonatomic, copy) NSString *appVersion;      // App 版本（显示在标题）
 @property (nonatomic, copy) NSString *localIP;
 @property (nonatomic, assign) NSInteger httpPort;
 @property (nonatomic, copy) NSString *deviceName;

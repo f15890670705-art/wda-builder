@@ -31,6 +31,7 @@ extern char **environ;
 #define INSTALL_PATH  "/var/mobile/ailintouch_engine"
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
+#define ENGINE_VERSION "1.0.0"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -228,14 +229,23 @@ static void handle_client(int cfd) {
     else if (strcmp(cmd, "UP") == 0)   { send_digitizer(a,b,3,1); snprintf(reply, sizeof(reply), "OK\n"); }
     else if (strcmp(cmd, "STATUS") == 0) {
         uint64_t s = g_sender_id ? g_sender_id : g_fallback_sender;
-        snprintf(reply, sizeof(reply), "engine=ready senderid=%llx fallback=%llx seq=%d\n",
+        snprintf(reply, sizeof(reply), "engine=%s ver=%s senderid=%llx fallback=%llx seq=%d\n",
+            "ready", ENGINE_VERSION,
             (unsigned long long)g_sender_id, (unsigned long long)s, g_seq);
     }
     else if (strcmp(cmd, "SHUTDOWN") == 0) {
-        /* App 停止服务时调用：礼貌退出，删 pid 文件，避免 launchd 判定崩溃重启 */
+        /* 停止服务：必须由 root 引擎自己 unload launchd（App 非 root 没权限），
+           否则 KeepAlive 会把引擎立刻重新拉起 */
         snprintf(reply, sizeof(reply), "OK bye\n");
         write(cfd, reply, strlen(reply));
         close(cfd);
+        pid_t spid;
+        char *la[] = {"/bin/launchctl", "unload", LAUNCHD_PLIST, NULL};
+        if (posix_spawn(&spid, "/bin/launchctl", NULL, NULL, la, environ) == 0) {
+            int st = 0;
+            waitpid(spid, &st, 0);
+            LOG("launchctl unload rc=%d", WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+        }
         unlink(PID_PATH);
         unlink(SOCK_PATH);
         LOG("SHUTDOWN requested, bye");
@@ -317,7 +327,7 @@ static int ensure_launchd(void) {
 
 int main(int argc, char *argv[]) {
     logfp = fopen(LOG_PATH, "a");  /* append，保留历史日志 */
-    LOG("touch_engine start uid=%d ppid=%d", getuid(), getppid());
+    LOG("touch_engine v%s start uid=%d ppid=%d", ENGINE_VERSION, getuid(), getppid());
 
     int is_launchd = (getppid() == 1);  /* launchd 拉起时父进程是 launchd */
 

@@ -95,6 +95,7 @@
 @interface ServiceManagerViewController ()
 @property (nonatomic, strong) UIScrollView *scroll;
 @property (nonatomic, strong) UIView *content;
+@property (nonatomic, strong) UILabel *titleLabel;
 
 @property (nonatomic, strong) ATCardView *cardStatus;
 @property (nonatomic, strong) ATCardView *cardDevice;
@@ -142,14 +143,14 @@
     self.content.translatesAutoresizingMaskIntoConstraints = NO;
     [self.scroll addSubview:self.content];
 
-    /* 顶部 title */
-    UILabel *title = [UILabel new];
-    title.translatesAutoresizingMaskIntoConstraints = NO;
-    title.text = @"服务管理";
-    title.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
-    title.textColor = ATText();
-    title.textAlignment = NSTextAlignmentCenter;
-    [self.content addSubview:title];
+    /* 顶部 title：显示 App 版本 */
+    self.titleLabel = [UILabel new];
+    self.titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.titleLabel.text = @"服务管理";
+    self.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    self.titleLabel.textColor = ATText();
+    self.titleLabel.textAlignment = NSTextAlignmentCenter;
+    [self.content addSubview:self.titleLabel];
 
     /* 三张卡片 */
     self.cardStatus  = [ATCardView card];
@@ -180,12 +181,12 @@
         [self.content.widthAnchor    constraintEqualToAnchor:self.scroll.widthAnchor],
 
         /* title */
-        [title.topAnchor      constraintEqualToAnchor:self.content.topAnchor constant:12],
-        [title.leadingAnchor  constraintEqualToAnchor:self.content.leadingAnchor],
-        [title.trailingAnchor constraintEqualToAnchor:self.content.trailingAnchor],
+        [self.titleLabel.topAnchor      constraintEqualToAnchor:self.content.topAnchor constant:12],
+        [self.titleLabel.leadingAnchor  constraintEqualToAnchor:self.content.leadingAnchor],
+        [self.titleLabel.trailingAnchor constraintEqualToAnchor:self.content.trailingAnchor],
 
         /* cards */
-        [self.cardStatus.topAnchor      constraintEqualToAnchor:title.bottomAnchor constant:12],
+        [self.cardStatus.topAnchor      constraintEqualToAnchor:self.titleLabel.bottomAnchor constant:12],
         [self.cardStatus.leadingAnchor  constraintEqualToAnchor:self.content.leadingAnchor constant:AT_PAD],
         [self.cardStatus.trailingAnchor constraintEqualToAnchor:self.content.trailingAnchor constant:-AT_PAD],
 
@@ -457,7 +458,8 @@
     self.statusText.textColor = running ? ATGreen() : ATRed();
     self.statusDot.backgroundColor = running ? ATGreen() : ATRed();
 
-    self.versionText.text = [NSString stringWithFormat:@"版本: %@", self.serviceVersion ?: @"-"];
+    self.titleLabel.text = [NSString stringWithFormat:@"服务管理  %@", self.appVersion ?: @""];
+    self.versionText.text = [NSString stringWithFormat:@"引擎版本: %@", self.serviceVersion ?: @"-"];
     self.ipText.text = self.localIP ?: @"-";
 
     NSString *port = self.httpPort > 0 ? [NSString stringWithFormat:@"HTTP 服务端口: %ld", (long)self.httpPort] : @"HTTP 服务端口: -";

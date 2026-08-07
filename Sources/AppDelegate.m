@@ -124,32 +124,25 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     self.enginePid = [self spawnEngineAsRoot];
 }
 
-/* 启动服务：先判断是否已启动；未启动才拉起 */
+/* 启动服务：先判断是否已启动；未启动才拉起（launchd 由 root 引擎自己 ensure） */
 - (void)startService {
     if ([self engineAlive]) {
-        /* 已启动：只确保 launchd 配置在，不重复拉起 */
         NSLog(@"[AilinTouch] startService: already running");
-        [self runLaunchctlLoad:YES];
         self.engineStopped = NO;
         return;
     }
-    /* 未启动：恢复 launchd 常驻 + 拉起引擎 */
     NSLog(@"[AilinTouch] startService: starting...");
-    [self runLaunchctlLoad:YES];
     self.engineStopped = NO;
     self.enginePid = [self spawnEngineAsRoot];
     NSLog(@"[AilinTouch] startService done, alive=%d", [self engineAlive]);
 }
 
-/* 停止服务：先 unload launchd（否则 KeepAlive 会把引擎立刻拉起来），再 SHUTDOWN/kill */
+/* 停止服务：root 引擎收到 SHUTDOWN 后自己 launchctl unload + 退出 */
 - (void)stopEngine {
     self.engineStopped = YES;   /* 通知 watchdog 不要复活 */
-    /* 1. launchctl unload —— 关键：把 KeepAlive 关掉，杀掉的引擎才不会被自动拉起 */
-    [self runLaunchctlLoad:NO];
-    /* 2. 礼貌退出 */
     NSString *r = [self forwardToEngine:@"SHUTDOWN\n"];
     NSLog(@"[AilinTouch] shutdown reply: %@", r);
-    /* 3. 兜底 kill */
+    /* 兜底 kill（若引擎没回 SHUTDOWN） */
     FILE *pf = fopen([ENGINE_PID_PATH UTF8String], "r");
     if (pf) {
         int pid = 0;
@@ -162,23 +155,6 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         fclose(pf);
     }
     usleep(300 * 1000);
-}
-
-- (int)runLaunchctlLoad:(BOOL)load {
-    pid_t pid;
-    char *argv[8];
-    if (load) {
-        char *a[] = {"/bin/launchctl", "load", "-w", "/Library/LaunchDaemons/com.ailintouch.engine.plist", NULL};
-        memcpy(argv, a, sizeof(a));
-    } else {
-        char *a[] = {"/bin/launchctl", "unload", "/Library/LaunchDaemons/com.ailintouch.engine.plist", NULL};
-        memcpy(argv, a, sizeof(a));
-    }
-    int rc = posix_spawn(&pid, argv[0], NULL, NULL, argv, environ);
-    if (rc != 0) return -1;
-    int st = 0;
-    waitpid(pid, &st, 0);
-    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
 #pragma mark IP
@@ -324,14 +300,23 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 - (void)refreshStatus {
     BOOL alive = [self engineAlive];
     NSString *state = alive ? @"已启动" : @"已停止";
-    NSString *ver = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-";
+    NSString *appVer = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-";
     NSString *ip = self.cachedIP ?: ([self currentWifiIP] ?: @"未连接");
     if (!self.cachedIP) self.cachedIP = ip;
+
+    /* 从引擎 STATUS 里解出引擎版本（ver=xxx） */
+    NSString *engStatus = alive ? [self forwardToEngine:@"STATUS\n"] : @"";
+    NSString *engVer = @"-";
+    if ([engStatus rangeOfString:@"ver="].location != NSNotFound) {
+        NSString *part = [engStatus componentsSeparatedByString:@"ver="].lastObject;
+        engVer = [part componentsSeparatedByString:@" "].firstObject ?: @"-";
+    }
 
     NSDictionary *dev = [self collectDeviceInfo];
 
     self.serviceVC.serviceState  = state;
-    self.serviceVC.serviceVersion = ver;
+    self.serviceVC.serviceVersion = engVer;
+    self.serviceVC.appVersion    = appVer;
     self.serviceVC.localIP       = ip;
     self.serviceVC.httpPort      = SERVER_PORT;
     self.serviceVC.deviceName    = dev[@"name"];

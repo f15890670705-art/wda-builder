@@ -3,7 +3,7 @@
 //
 //  卡片式 UI：顶部标题 + 服务状态/设备信息/服务控制 三张卡片
 //  底部 TabBar：控制面板 / 服务管理
-//  引擎：spawn root touch_engine，HTTP :8080 (应用层 watchdog)
+//  引擎：spawn root touch_engine，HTTP :8080（常驻由 launchd 全权负责）
 //
 #import "AppDelegate.h"
 #import "ATTabBarController.h"

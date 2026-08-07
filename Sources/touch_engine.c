@@ -230,7 +230,18 @@ static void handle_client(int cfd) {
         uint64_t s = g_sender_id ? g_sender_id : g_fallback_sender;
         snprintf(reply, sizeof(reply), "engine=ready senderid=%llx fallback=%llx seq=%d\n",
             (unsigned long long)g_sender_id, (unsigned long long)s, g_seq);
-    } else snprintf(reply, sizeof(reply), "ERR unknown\n");
+    }
+    else if (strcmp(cmd, "SHUTDOWN") == 0) {
+        /* App 停止服务时调用：礼貌退出，删 pid 文件，避免 launchd 判定崩溃重启 */
+        snprintf(reply, sizeof(reply), "OK bye\n");
+        write(cfd, reply, strlen(reply));
+        close(cfd);
+        unlink(PID_PATH);
+        unlink(SOCK_PATH);
+        LOG("SHUTDOWN requested, bye");
+        exit(0);
+    }
+    else snprintf(reply, sizeof(reply), "ERR unknown\n");
     write(cfd, reply, strlen(reply));
     close(cfd);
 }

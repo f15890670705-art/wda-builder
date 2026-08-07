@@ -23,6 +23,9 @@
 #import <signal.h>
 #import <net/if.h>
 #import <sys/sysctl.h>
+#import <sys/wait.h>
+#import <stdlib.h>
+#import <string.h>
 
 #define SERVER_PORT       8080
 #define ENGINE_SOCK       "/tmp/ailintouch.sock"
@@ -120,10 +123,25 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     self.enginePid = [self spawnEngineAsRoot];
 }
 
+/* 恢复 launchd 常驻（开机自启 + KeepAlive），然后拉起引擎 */
+- (void)startService {
+    /* 1. launchctl load -w 恢复守护配置 */
+    [self runLaunchctlLoad:YES];
+    /* 2. 拉起引擎（launchd 有 KeepAlive，spawn 后会被托管常驻） */
+    if (![self engineAlive]) {
+        self.enginePid = [self spawnEngineAsRoot];
+    }
+    NSLog(@"[AilinTouch] startService done, alive=%d", [self engineAlive]);
+}
+
+/* 停止服务：先 unload launchd（否则 KeepAlive 会把引擎立刻拉起来），再 SHUTDOWN/kill */
 - (void)stopEngine {
-    /* 先 try unix socket SHUTDOWN */
-    [self forwardToEngine:@"SHUTDOWN\n"];
-    /* 再读 pid 文件 kill */
+    /* 1. launchctl unload —— 关键：把 KeepAlive 关掉，杀掉的引擎才不会被自动拉起 */
+    [self runLaunchctlLoad:NO];
+    /* 2. 礼貌退出 */
+    NSString *r = [self forwardToEngine:@"SHUTDOWN\n"];
+    NSLog(@"[AilinTouch] shutdown reply: %@", r);
+    /* 3. 兜底 kill */
     FILE *pf = fopen([ENGINE_PID_PATH UTF8String], "r");
     if (pf) {
         int pid = 0;
@@ -131,11 +149,28 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
             if (kill(pid, 0) == 0) {
                 kill(pid, SIGKILL);
                 NSLog(@"[AilinTouch] killed engine pid=%d", pid);
-                /* launchd KeepAlive 会自动拉起，等几秒就回来 */
             }
         }
         fclose(pf);
     }
+    usleep(300 * 1000);
+}
+
+- (int)runLaunchctlLoad:(BOOL)load {
+    pid_t pid;
+    char *argv[8];
+    if (load) {
+        char *a[] = {"/bin/launchctl", "load", "-w", "/Library/LaunchDaemons/com.ailintouch.engine.plist", NULL};
+        memcpy(argv, a, sizeof(a));
+    } else {
+        char *a[] = {"/bin/launchctl", "unload", "/Library/LaunchDaemons/com.ailintouch.engine.plist", NULL};
+        memcpy(argv, a, sizeof(a));
+    }
+    int rc = posix_spawn(&pid, argv[0], NULL, NULL, argv, environ);
+    if (rc != 0) return -1;
+    int st = 0;
+    waitpid(pid, &st, 0);
+    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
 #pragma mark IP
@@ -218,14 +253,26 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 
     /* 按钮回调 */
     __weak typeof(self) ws = self;
-    self.serviceVC.onTapStart        = ^{ [ws ensureEngine]; };
-    self.serviceVC.onTapStop         = ^{ [ws stopEngine];  };
-    self.serviceVC.onTapRefreshStatus= ^{ [ws refreshStatus];};
-    self.serviceVC.onTapRefreshIP    = ^{
+    self.serviceVC.onTapStart = ^{
+        [ws startService];
+        [ws showToast:@"启动服务"];
+        [ws refreshStatus];
+    };
+    self.serviceVC.onTapStop = ^{
+        [ws stopEngine];
+        [ws showToast:@"停止服务"];
+        [ws refreshStatus];
+    };
+    self.serviceVC.onTapRefreshStatus = ^{
+        [ws refreshStatus];
+        [ws showToast:@"状态已刷新"];
+    };
+    self.serviceVC.onTapRefreshIP = ^{
         ws.cachedIP = [ws currentWifiIP] ?: @"无 WiFi";
         ws.serviceVC.localIP = ws.cachedIP;
         ws.controlVC.localIP = ws.cachedIP;
         [ws refreshStatus];
+        [ws showToast:@"IP 已刷新"];
     };
     self.serviceVC.onTapLogDir = ^{
         UIViewController *vc = [[FileViewerViewController alloc]
@@ -285,6 +332,46 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 
     self.controlVC.localIP = ip;
     self.controlVC.httpPort = SERVER_PORT;
+}
+
+#pragma mark Toast
+
+- (void)showToast:(NSString *)msg {
+    UIWindow *w = self.window;
+    if (!w) return;
+
+    UILabel *toast = [UILabel new];
+    toast.translatesAutoresizingMaskIntoConstraints = NO;
+    toast.text = msg;
+    toast.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    toast.textColor = [UIColor whiteColor];
+    toast.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.78];
+    toast.textAlignment = NSTextAlignmentCenter;
+    toast.layer.cornerRadius = 18;
+    toast.layer.masksToBounds = YES;
+    toast.numberOfLines = 1;
+    toast.alpha = 0;
+    [w addSubview:toast];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [toast.centerXAnchor constraintEqualToAnchor:w.centerXAnchor],
+        [toast.bottomAnchor constraintEqualToAnchor:w.safeAreaLayoutGuide.bottomAnchor constant:-90],
+        [toast.widthAnchor constraintGreaterThanOrEqualToConstant:120],
+        [toast.heightAnchor constraintEqualToConstant:36],
+    ]];
+    [toast sizeToFit];
+
+    [UIView animateWithDuration:0.22 animations:^{
+        toast.alpha = 1.0;
+    } completion:^(BOOL f) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [UIView animateWithDuration:0.3 animations:^{
+                toast.alpha = 0;
+            } completion:^(BOOL f2) {
+                [toast removeFromSuperview];
+            }];
+        });
+    }];
 }
 
 @end

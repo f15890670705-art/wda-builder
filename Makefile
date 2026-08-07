@@ -58,3 +58,14 @@ ipa:
 clean:
 	@rm -rf $(BUILD_DIR)
 	@echo "cleaned"
+
+# 自动递增版本号（major +1）并 commit。改完代码后跑一次 make bump 再 push。
+bump:
+	@VERSION=$$(plutil -extract CFBundleShortVersionString raw Resources/Info.plist) && \
+	MAJOR=$$(echo $$VERSION | cut -d. -f1) && \
+	NEW=$$((MAJOR + 1)).0 && \
+	plutil -replace CFBundleShortVersionString -string "$$NEW" Resources/Info.plist && \
+	plutil -replace CFBundleVersion -string "$$((MAJOR + 1))" Resources/Info.plist && \
+	git add Resources/Info.plist && \
+	git commit -m "release: v$$NEW" && \
+	echo "✅ bumped to v$$NEW"

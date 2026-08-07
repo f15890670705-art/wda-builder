@@ -104,6 +104,27 @@ static int hid_init(void) {
     void* (*regcb)(void*, void*, void*, void*) = dlsym(io_handle, "IOHIDEventSystemClientRegisterEventCallback");
     if (regcb) regcb(hid_client, event_callback, NULL, NULL);
 
+    /* ⭐ 必须 SetMatching 声明监听的事件类型，否则客户端收不到任何事件。
+       匹配 digitizer(11) + keyboard(3) + 其他常用类型，确保能拿到真实触摸。 */
+    void* (*setm)(void*, CFDictionaryRef) = dlsym(io_handle, "IOHIDEventSystemClientSetMatching");
+    if (setm) {
+        CFDictionaryRef dict = NULL;
+        int types[] = {11, 3, 12, 29};  /* digitizer, keyboard, button, ... */
+        int n = 4;
+        CFStringRef keys[4]; CFNumberRef vals[4];
+        for (int i = 0; i < n; i++) {
+            keys[i] = CFSTR("IOHIDEventType");
+            vals[i] = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &types[i]);
+        }
+        dict = CFDictionaryCreate(kCFAllocatorDefault, (const void**)keys, (const void**)vals, n, NULL, NULL);
+        setm(hid_client, dict);
+        CFRelease(dict);
+        for (int i = 0; i < n; i++) CFRelease(vals[i]);
+        LOG("SetMatching done (digitizer+keyboard)");
+    } else {
+        LOG("WARN: SetMatching not found");
+    }
+
     LOG("HID engine ready, waiting real touch to capture senderID");
     return 0;
 }

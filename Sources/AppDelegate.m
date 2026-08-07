@@ -31,6 +31,7 @@
 #define ENGINE_SOCK       "/tmp/ailintouch.sock"
 #define ENGINE_PID_PATH   @"/var/mobile/ailintouch_engine.pid"
 #define ENGINE_LOG_PATH   @"/var/mobile/ailintouch_engine.log"
+#define ENGINE_STOPPED    @"/var/mobile/ailintouch.stopped"
 
 extern char **environ;
 static AppDelegate *g_delegate;
@@ -126,6 +127,8 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 
 /* 启动服务：先判断是否已启动；未启动才拉起（launchd 由 root 引擎自己 ensure） */
 - (void)startService {
+    /* 清掉手动停止标记，允许引擎再次常驻 */
+    unlink([ENGINE_STOPPED UTF8String]);
     if ([self engineAlive]) {
         NSLog(@"[AilinTouch] startService: already running");
         self.engineStopped = NO;
@@ -270,8 +273,13 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [ws.nav pushViewController:vc animated:YES];
     };
 
-    /* 1. 拉起引擎 */
-    self.enginePid = [self spawnEngineAsRoot];
+    /* 1. 拉起引擎（若上次手动停止过，尊重用户选择：不自动拉起） */
+    if ([[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED]) {
+        self.engineStopped = YES;   /* 保持停止态，watchdog 不复活 */
+        NSLog(@"[AilinTouch] stopped marker present, engine stays down");
+    } else {
+        self.enginePid = [self spawnEngineAsRoot];
+    }
 
     /* 2. 每秒刷新状态 */
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {

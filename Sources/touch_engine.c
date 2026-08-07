@@ -31,7 +31,8 @@ extern char **environ;
 #define INSTALL_PATH  "/var/mobile/ailintouch_engine"
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
-#define ENGINE_VERSION "1.0.0"
+#define STOPPED_MARKER "/var/mobile/ailintouch.stopped"
+#define ENGINE_VERSION "1.0.1"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -234,18 +235,26 @@ static void handle_client(int cfd) {
             (unsigned long long)g_sender_id, (unsigned long long)s, g_seq);
     }
     else if (strcmp(cmd, "SHUTDOWN") == 0) {
-        /* 停止服务：必须由 root 引擎自己 unload launchd（App 非 root 没权限），
-           否则 KeepAlive 会把引擎立刻重新拉起 */
+        /* 停止服务：删除 launchd 配置 + 异步 unload/remove（绝不 waitpid 阻塞——
+           否则引擎卡在 GCD 主队列，exit 不执行，8080 一直通）+
+           写 stopped 标记，即使 launchd 竞态拉起也会立即退出 */
         snprintf(reply, sizeof(reply), "OK bye\n");
         write(cfd, reply, strlen(reply));
         close(cfd);
-        pid_t spid;
+
+        unlink(LAUNCHD_PLIST);                 /* 删配置，防重新 load */
+        FILE *mk = fopen(STOPPED_MARKER, "w"); /* 写停止标记 */
+        if (mk) { fputs("stopped\n", mk); fclose(mk); }
+
+        /* 异步 unload（不 waitpid），引擎立即退出 */
+        pid_t sp1;
         char *la[] = {"/bin/launchctl", "unload", LAUNCHD_PLIST, NULL};
-        if (posix_spawn(&spid, "/bin/launchctl", NULL, NULL, la, environ) == 0) {
-            int st = 0;
-            waitpid(spid, &st, 0);
-            LOG("launchctl unload rc=%d", WIFEXITED(st) ? WEXITSTATUS(st) : -1);
-        }
+        posix_spawn(&sp1, "/bin/launchctl", NULL, NULL, la, environ);
+        /* 双保险：按 label remove（iOS 标准停止 daemon 方式） */
+        pid_t sp2;
+        char *rm[] = {"/bin/launchctl", "remove", LAUNCHD_LABEL, NULL};
+        posix_spawn(&sp2, "/bin/launchctl", NULL, NULL, rm, environ);
+
         unlink(PID_PATH);
         unlink(SOCK_PATH);
         LOG("SHUTDOWN requested, bye");
@@ -328,6 +337,12 @@ static int ensure_launchd(void) {
 int main(int argc, char *argv[]) {
     logfp = fopen(LOG_PATH, "a");  /* append，保留历史日志 */
     LOG("touch_engine v%s start uid=%d ppid=%d", ENGINE_VERSION, getuid(), getppid());
+
+    /* 用户手动停止后留下的标记：被 launchd 竞态拉起也立即退出，不提供 HTTP */
+    if (access(STOPPED_MARKER, F_OK) == 0) {
+        LOG("stopped marker present, exiting");
+        return 0;
+    }
 
     int is_launchd = (getppid() == 1);  /* launchd 拉起时父进程是 launchd */
 

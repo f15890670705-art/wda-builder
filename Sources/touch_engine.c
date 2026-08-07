@@ -105,22 +105,18 @@ static int hid_init(void) {
     if (regcb) regcb(hid_client, event_callback, NULL, NULL);
 
     /* ⭐ 必须 SetMatching 声明监听的事件类型，否则客户端收不到任何事件。
-       匹配 digitizer(11) + keyboard(3) + 其他常用类型，确保能拿到真实触摸。 */
+       注意：字典 key 必须唯一！匹配 digitizer(11) 类型即可捕获真实触摸。 */
     void* (*setm)(void*, CFDictionaryRef) = dlsym(io_handle, "IOHIDEventSystemClientSetMatching");
     if (setm) {
-        CFDictionaryRef dict = NULL;
-        int types[] = {11, 3, 12, 29};  /* digitizer, keyboard, button, ... */
-        int n = 4;
-        CFStringRef keys[4]; CFNumberRef vals[4];
-        for (int i = 0; i < n; i++) {
-            keys[i] = CFSTR("IOHIDEventType");
-            vals[i] = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &types[i]);
-        }
-        dict = CFDictionaryCreate(kCFAllocatorDefault, (const void**)keys, (const void**)vals, n, NULL, NULL);
+        int digitizerType = 11;  /* kIOHIDEventTypeDigitizer */
+        CFStringRef key = CFSTR("IOHIDEventType");
+        CFNumberRef val = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &digitizerType);
+        CFDictionaryRef dict = CFDictionaryCreate(kCFAllocatorDefault,
+            (const void**)&key, (const void**)&val, 1, NULL, NULL);
         setm(hid_client, dict);
         CFRelease(dict);
-        for (int i = 0; i < n; i++) CFRelease(vals[i]);
-        LOG("SetMatching done (digitizer+keyboard)");
+        CFRelease(val);
+        LOG("SetMatching digitizer(11) done");
     } else {
         LOG("WARN: SetMatching not found");
     }

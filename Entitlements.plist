@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- ============================================================
+	     AilinTouch Entitlements — 采用 Ailin.ipa 验证过的权限方案
+	     安装方式：TrollStore 直接安装本 IPA。
+	     禁止用爱思 / Sideloadly 重签（会抹掉全部私有 entitlements）。
+	     ============================================================ -->
+
+	<!-- 平台应用身份（Apple 系统 App 才有）——CoreTrust 漏洞赋予 -->
+	<key>platform-application</key>
+	<true/>
+
+	<!-- 关闭沙盒 -->
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+
+	<!-- ⭐ 决定性权限：HID 事件派发（模拟触摸）。
+	     Ailin.ipa 实际使用的 key。IOHIDEventSystemClientDispatchEvent
+	     缺少此权限时调用返回成功但事件被系统静默丢弃。 -->
+	<key>com.apple.private.hid.client.event-dispatch</key>
+	<true/>
+
+	<!-- HID 事件监控 / 过滤（配套） -->
+	<key>com.apple.private.hid.client.event-monitor</key>
+	<true/>
+	<key>com.apple.private.hid.client.event-filter</key>
+	<true/>
+	<key>com.apple.private.hid.client.service-protected</key>
+	<true/>
+	<key>com.apple.private.hid.manager.client</key>
+	<true/>
+
+	<!-- iOS 14 备用门控名（不同 iOS 版本权限名可能不同，未知 key 仅被忽略，无副作用） -->
+	<key>com.apple.iohideventsystem.client.dispatch</key>
+	<true/>
+	<key>com.apple.iokit.hid.system-client</key>
+	<true/>
+	<key>com.apple.private.hid.client.event-dispatcher</key>
+	<true/>
+
+	<!-- 前台应用切换 / 检测（云控必要） -->
+	<key>com.apple.springboard.launchapplications</key>
+	<true/>
+	<key>com.apple.springboard.frontmostApplication.bundleID</key>
+	<true/>
+	<key>com.apple.backboardd.launchapplications</key>
+	<true/>
+
+	<!-- 调试 / 进程操控（与 Ailin 一致） -->
+	<key>get-task-allow</key>
+	<true/>
+	<key>task_for_pid-allow</key>
+	<true/>
+	<key>com.apple.private.thread-set-state</key>
+	<true/>
+
+	<!-- 全盘读写（Ailin 同款） -->
+	<key>com.apple.security.exception.files.absolute-path.read-write</key>
+	<array>
+		<string>/</string>
+	</array>
+
+	<!-- 无障碍（TCC 全服务） -->
+	<key>com.apple.private.tcc.allow</key>
+	<array>
+		<string>kTCCServiceAccessibility</string>
+		<string>kTCCServiceAll</string>
+	</array>
+</dict>
+</plist>

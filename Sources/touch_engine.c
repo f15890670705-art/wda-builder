@@ -143,7 +143,13 @@ static int hid_init(void) {
 
     LOG("HID engine ready, waiting real touch to capture senderID");
     g_fallback_sender = boot_session_sender();
-    LOG("fallback senderID=0x%llx", (unsigned long long)g_fallback_sender);
+    if (!g_fallback_sender) {
+        /* MobileGestalt 不可用时用固定非 0 值，保证注入实际发出（用于诊断） */
+        g_fallback_sender = 0x8000000817319372ULL;
+        LOG("using hardcoded fallback senderID=0x%llx", (unsigned long long)g_fallback_sender);
+    } else {
+        LOG("fallback senderID=0x%llx", (unsigned long long)g_fallback_sender);
+    }
     return 0;
 }
 

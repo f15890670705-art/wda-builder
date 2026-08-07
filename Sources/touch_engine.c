@@ -126,7 +126,7 @@ static int hid_init(void) {
     return 0;
 }
 
-static void send_digitizer(float x, float y, int phase) {
+static void send_digitizer(float x, float y, int phase, int finger_index) {
     if (!hid_client) return;
     uint64_t sender = g_sender_id ? g_sender_id : g_fallback_sender;
     if (!sender) return;
@@ -149,7 +149,8 @@ static void send_digitizer(float x, float y, int phase) {
         p_SetInteger(d, (void*)(uintptr_t)0xb0019, 1);
         p_SetInteger(d, (void*)(uintptr_t)0xb0007, 0x23);
     }
-    void *f = p_CreateFinger(NULL, ts, (uint32_t)(g_seq % 10) + 1, 2, evMask,
+    /* ⭐ finger index 固定：down/up 必须同一 index，否则 up 会被当成另一根手指 */
+    void *f = p_CreateFinger(NULL, ts, (uint32_t)finger_index, 2, evMask,
         nx, ny, 0, 0.04, 0, range, touch, 0);
     if (f) {
         if (p_AppendEvent) p_AppendEvent(d, f, 0);
@@ -159,20 +160,20 @@ static void send_digitizer(float x, float y, int phase) {
     p_Dispatch(hid_client, d);
     CFRelease(d);
     g_seq++;
-    LOG("dispatch x=%.0f y=%.0f phase=%d", x, y, phase);
+    LOG("dispatch x=%.0f y=%.0f phase=%d idx=%d", x, y, phase, finger_index);
 }
 
-static void do_tap(float x, float y) { send_digitizer(x, y, 1); usleep(60*1000); send_digitizer(x, y, 3); }
+static void do_tap(float x, float y) { send_digitizer(x, y, 1, 1); usleep(60*1000); send_digitizer(x, y, 3, 1); }
 static void do_swipe(float x1, float y1, float x2, float y2, int ms) {
     int steps = 20; if (ms < 50) ms = 50;
     int d = (ms*1000)/steps;
-    send_digitizer(x1, y1, 1);
+    send_digitizer(x1, y1, 1, 1);
     for (int i = 1; i <= steps; i++) {
         float t = (float)i/steps;
-        send_digitizer(x1+(x2-x1)*t, y1+(y2-y1)*t, 2);
+        send_digitizer(x1+(x2-x1)*t, y1+(y2-y1)*t, 2, 1);
         usleep(d);
     }
-    send_digitizer(x2, y2, 3);
+    send_digitizer(x2, y2, 3, 1);
 }
 
 static void handle_client(int cfd) {
@@ -213,9 +214,9 @@ static void handle_client(int cfd) {
     sscanf(buf, "%15s %f %f %f %f %d", cmd, &a, &b, &c, &d, &ms);
     if (strcmp(cmd, "TAP") == 0 && n > 4) { do_tap(a,b); snprintf(reply, sizeof(reply), "OK\n"); }
     else if (strcmp(cmd, "SWIPE") == 0) { do_swipe(a,b,c,d,ms); snprintf(reply, sizeof(reply), "OK\n"); }
-    else if (strcmp(cmd, "DOWN") == 0) { send_digitizer(a,b,1); snprintf(reply, sizeof(reply), "OK\n"); }
-    else if (strcmp(cmd, "MOVE") == 0) { send_digitizer(a,b,2); snprintf(reply, sizeof(reply), "OK\n"); }
-    else if (strcmp(cmd, "UP") == 0)   { send_digitizer(a,b,3); snprintf(reply, sizeof(reply), "OK\n"); }
+    else if (strcmp(cmd, "DOWN") == 0) { send_digitizer(a,b,1,1); snprintf(reply, sizeof(reply), "OK\n"); }
+    else if (strcmp(cmd, "MOVE") == 0) { send_digitizer(a,b,2,1); snprintf(reply, sizeof(reply), "OK\n"); }
+    else if (strcmp(cmd, "UP") == 0)   { send_digitizer(a,b,3,1); snprintf(reply, sizeof(reply), "OK\n"); }
     else if (strcmp(cmd, "STATUS") == 0) {
         uint64_t s = g_sender_id ? g_sender_id : g_fallback_sender;
         snprintf(reply, sizeof(reply), "engine=ready senderid=%llx fallback=%llx seq=%d\n",

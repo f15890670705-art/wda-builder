@@ -1,10 +1,8 @@
 /*
- * touch_engine.c — root HID 注入引擎（iOS 14 CFRunLoop 版）
+ * touch_engine.c — root HID 注入引擎（CFRunLoop + GCD）
  *
- * 关键修复：必须把 HID client ScheduleWithRunLoop，否则 DispatchEvent 不会真发出去。
- * 整个引擎跑在 main 的 CFRunLoop 上（socket listener + HID client 都挂上去）。
- *
- * 协议：Unix socket /tmp/ailintouch.sock，文本命令 OK/ERR
+ * 全部跑在 main 的 CFRunLoop 上：HID client (IOKit) 和 socket listener (GCD)
+ * 都由 runloop 驱动，否则 DispatchEvent 不会真发出去。
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,7 +10,6 @@
 #include <stdarg.h>
 #include <unistd.h>
 #include <dlfcn.h>
-#include <signal.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -32,12 +29,12 @@ static void dlog(const char *fmt, ...) {
 }
 #define LOG(fmt, ...) dlog(fmt, ##__VA_ARGS__)
 
-/* ---------- IOKit 动态加载 ---------- */
 static void *io_handle;
 static void *hid_client;
 static uint64_t g_sender_id = 0;
 static uint64_t g_fallback_sender = 0;
 static int g_seq = 1000;
+static int g_listen_fd = -1;
 
 typedef void* (*fn_CreateDigitizer)(void*, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
     double, double, double, double, double, uint32_t, uint32_t, uint32_t);
@@ -66,14 +63,13 @@ static fn_Schedule        p_Schedule;
 static uint64_t boot_session_sender(void) {
     void *mg = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
     if (!mg) return 0;
-    void* (*copyAnswer)(CFStringRef) = dlsym(mg, "MGCopyAnswer");
-    if (!copyAnswer) return 0;
-    CFStringRef bs = copyAnswer(CFSTR("BootSessionID"));
+    void* (*ca)(CFStringRef) = dlsym(mg, "MGCopyAnswer");
+    if (!ca) return 0;
+    CFStringRef bs = ca(CFSTR("BootSessionID"));
     if (!bs) return 0;
     char buf[128] = {0};
     CFStringGetCString(bs, buf, sizeof(buf), kCFStringEncodingUTF8);
     CFRelease(bs);
-    LOG("BootSessionID='%s'", buf);
     uint64_t h = 0xcbf29ce484222325ULL;
     for (char *p = buf; *p; p++) { h ^= (unsigned char)*p; h *= 0x100000001b3ULL; }
     h |= 0x0000000080000000ULL;
@@ -83,11 +79,10 @@ static uint64_t boot_session_sender(void) {
 static int hid_init(void) {
     io_handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
     if (!io_handle) { LOG("IOKit dlopen failed"); return -1; }
-
     void* (*cc)(void*) = dlsym(io_handle, "IOHIDEventSystemClientCreate");
-    if (!cc) { LOG("IOHIDEventSystemClientCreate not found"); return -2; }
+    if (!cc) return -2;
     hid_client = cc((void*)kCFAllocatorDefault);
-    if (!hid_client) { LOG("HID client create failed"); return -3; }
+    if (!hid_client) return -3;
 
     p_CreateDigitizer = (fn_CreateDigitizer)dlsym(io_handle, "IOHIDEventCreateDigitizerEvent");
     p_CreateFinger    = (fn_CreateFinger)dlsym(io_handle, "IOHIDEventCreateDigitizerFingerEvent");
@@ -104,8 +99,7 @@ static int hid_init(void) {
         LOG("HID symbols missing"); return -4;
     }
 
-    if (p_RegCB) p_RegCB(hid_client, NULL, NULL, NULL);  /* 监听真实触摸 */
-
+    if (p_RegCB) p_RegCB(hid_client, NULL, NULL, NULL);
     if (p_SetMatching) {
         int t = 11;
         CFStringRef k = CFSTR("IOHIDEventType");
@@ -115,7 +109,7 @@ static int hid_init(void) {
         CFRelease(d); CFRelease(v);
     }
 
-    /* ⭐ 必须 ScheduleWithRunLoop 到 main runloop，否则 dispatch 不真发出 */
+    /* ⭐ 必须 Schedule 到 main runloop，否则 DispatchEvent 不真发 */
     if (p_Schedule) {
         p_Schedule(hid_client, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
         LOG("HID client scheduled on main runloop");
@@ -151,7 +145,7 @@ static void send_digitizer(float x, float y, int phase) {
     if (!d) return;
     if (p_SetInteger) {
         p_SetInteger(d, (void*)(uintptr_t)0xb0019, 1);
-        p_SetInteger(d, (void*)(uintptr_t)0xb00007, 0x23);
+        p_SetInteger(d, (void*)(uintptr_t)0xb0007, 0x23);
     }
     void *f = p_CreateFinger(NULL, ts, (uint32_t)(g_seq % 10) + 1, 2, evMask,
         nx, ny, 0, 0.04, 0, range, touch, 0);
@@ -160,10 +154,10 @@ static void send_digitizer(float x, float y, int phase) {
         CFRelease(f);
     }
     if (p_SetSender) p_SetSender(d, sender);
-    p_Dispatch(hid_client, d);  /* 现在 runloop 在跑，dispatch 真发出去 */
+    p_Dispatch(hid_client, d);
     CFRelease(d);
     g_seq++;
-    LOG("dispatch x=%.0f y=%.0f phase=%d seq=%d", x, y, phase, g_seq);
+    LOG("dispatch x=%.0f y=%.0f phase=%d", x, y, phase);
 }
 
 static void do_tap(float x, float y) { send_digitizer(x, y, 1); usleep(60*1000); send_digitizer(x, y, 3); }
@@ -179,9 +173,6 @@ static void do_swipe(float x1, float y1, float x2, float y2, int ms) {
     send_digitizer(x2, y2, 3);
 }
 
-/* ---------- GCD dispatch source 监听 socket（自动集成到 main runloop） ---------- */
-static int g_listen_fd = -1;
-
 static void handle_client(int cfd) {
     char buf[256] = {0};
     ssize_t n = read(cfd, buf, sizeof(buf)-1);
@@ -201,35 +192,6 @@ static void handle_client(int cfd) {
     } else snprintf(reply, sizeof(reply), "ERR unknown\n");
     write(cfd, reply, strlen(reply));
     close(cfd);
-}
-
-/* CFSocket accept 回调（监听 socket 收到新连接） */
-static void handle_client(int cfd) {
-    char buf[256] = {0};
-    ssize_t n = read(cfd, buf, sizeof(buf)-1);
-    if (n <= 0) { close(cfd); return; }
-    char cmd[16] = {0}; float a=0,b=0,c=0,d=0; int ms=300;
-    sscanf(buf, "%15s %f %f %f %f %d", cmd, &a, &b, &c, &d, &ms);
-    char reply[160];
-    if (strcmp(cmd, "TAP") == 0 && n > 4) { do_tap(a,b); snprintf(reply, sizeof(reply), "OK\n"); }
-    else if (strcmp(cmd, "SWIPE") == 0) { do_swipe(a,b,c,d,ms); snprintf(reply, sizeof(reply), "OK\n"); }
-    else if (strcmp(cmd, "DOWN") == 0) { send_digitizer(a,b,1); snprintf(reply, sizeof(reply), "OK\n"); }
-    else if (strcmp(cmd, "MOVE") == 0) { send_digitizer(a,b,2); snprintf(reply, sizeof(reply), "OK\n"); }
-    else if (strcmp(cmd, "UP") == 0)   { send_digitizer(a,b,3); snprintf(reply, sizeof(reply), "OK\n"); }
-    else if (strcmp(cmd, "STATUS") == 0) {
-        uint64_t s = g_sender_id ? g_sender_id : g_fallback_sender;
-        snprintf(reply, sizeof(reply), "engine=ready senderid=%llx fallback=%llx seq=%d\n",
-            (unsigned long long)g_sender_id, (unsigned long long)s, g_seq);
-    } else snprintf(reply, sizeof(reply), "ERR unknown\n");
-    write(cfd, reply, strlen(reply));
-    close(cfd);
-}
-
-static int g_listen_fd = -1;
-static void accept_event(void *ctx) {
-    (void)ctx;
-    int cfd = accept(g_listen_fd, NULL, NULL);
-    if (cfd >= 0) handle_client(cfd);
 }
 
 int main(int argc, char *argv[]) {
@@ -238,7 +200,6 @@ int main(int argc, char *argv[]) {
 
     if (hid_init() != 0) { LOG("hid_init failed"); return 1; }
 
-    /* Unix socket listener：用 GCD dispatch source 监听，自动集成到 main queue/runloop */
     unlink(SOCK_PATH);
     g_listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     struct sockaddr_un addr = {0};
@@ -248,6 +209,7 @@ int main(int argc, char *argv[]) {
     listen(g_listen_fd, 8);
     chmod(SOCK_PATH, 0777);
 
+    /* GCD dispatch source 监听 socket，集成到 main queue（驱动 runloop） */
     dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ,
         (dispatch_fd_t)g_listen_fd, 0, dispatch_get_main_queue());
     dispatch_source_set_event_handler(src, ^{
@@ -257,7 +219,7 @@ int main(int argc, char *argv[]) {
     dispatch_resume(src);
     LOG("listening on %s (GCD main queue)", SOCK_PATH);
 
-    /* 启动 main runloop（HID client 挂在这里，dispatch source 也在主队列上被驱动） */
+    /* HID client 已在 hid_init 里 Schedule 到 main runloop；启动 runloop 驱动它 */
     CFRunLoopRun();
     return 0;
 }

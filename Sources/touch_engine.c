@@ -14,15 +14,23 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
+#include <spawn.h>
 #include <dispatch/dispatch.h>
+#include <mach-o/dyld.h>
 #include <mach/mach_time.h>
 #include <CoreFoundation/CoreFoundation.h>
+
+extern char **environ;
 
 #define SOCK_PATH "/tmp/ailintouch.sock"
 #define LOG_PATH  "/var/mobile/ailintouch_engine.log"
 #define PID_PATH  "/var/mobile/ailintouch_engine.pid"
 #define HTTP_PORT 8080
+#define INSTALL_PATH  "/var/mobile/ailintouch_engine"
+#define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
+#define LAUNCHD_LABEL "com.ailintouch.engine"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -245,11 +253,74 @@ static void kill_old_instance(void) {
     if (wf) { fprintf(wf, "%d", getpid()); fclose(wf); }
 }
 
-int main(int argc, char *argv[]) {
-    logfp = fopen(LOG_PATH, "w");
-    LOG("touch_engine start uid=%d", getuid());
+/* 复制自身到固定路径 */
+static int copy_self(const char *dst) {
+    char self[1024] = {0};
+    uint32_t sz = sizeof(self);
+    _NSGetExecutablePath(self, &sz);
+    if (strcmp(self, dst) == 0) return 0;
 
-    kill_old_instance();  /* 清旧实例 */
+    FILE *in = fopen(self, "rb");
+    if (!in) { LOG("open self failed: %s", self); return -1; }
+    FILE *out = fopen(dst, "wb");
+    if (!out) { fclose(in); LOG("open dst failed: %s", dst); return -1; }
+    char buf[8192]; size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) fwrite(buf, 1, n, out);
+    fclose(in); fclose(out);
+    chmod(dst, 0755);
+    LOG("copied self -> %s", dst);
+    return 0;
+}
+
+/* 安装 launchd 守护进程（开机自启 + KeepAlive 崩溃重启） */
+static int ensure_launchd(void) {
+    if (copy_self(INSTALL_PATH) != 0) return -1;
+
+    FILE *pf = fopen(LAUNCHD_PLIST, "w");
+    if (!pf) { LOG("cannot write %s", LAUNCHD_PLIST); return -1; }
+    fprintf(pf,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+        "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+        "<plist version=\"1.0\">\n<dict>\n"
+        "\t<key>Label</key>\n\t<string>%s</string>\n"
+        "\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>%s</string>\n\t</array>\n"
+        "\t<key>RunAtLoad</key>\n\t<true/>\n"
+        "\t<key>KeepAlive</key>\n\t<true/>\n"
+        "\t<key>UserName</key>\n\t<string>root</string>\n"
+        "</dict>\n</plist>\n", LAUNCHD_LABEL, INSTALL_PATH);
+    fclose(pf);
+    LOG("wrote %s", LAUNCHD_PLIST);
+
+    /* iOS 14 用 launchctl load -w */
+    pid_t pid;
+    char *argv[] = {"launchctl", "load", "-w", LAUNCHD_PLIST, NULL};
+    int rc = posix_spawn(&pid, "/bin/launchctl", NULL, NULL, argv, environ);
+    if (rc != 0) { LOG("launchctl spawn failed: %s", strerror(rc)); return -1; }
+    int st = 0;
+    waitpid(pid, &st, 0);
+    int erc = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+    LOG("launchctl load rc=%d", erc);
+    return 0;
+}
+
+int main(int argc, char *argv[]) {
+    logfp = fopen(LOG_PATH, "a");  /* append，保留历史日志 */
+    LOG("touch_engine start uid=%d ppid=%d", getuid(), getppid());
+
+    int is_launchd = (getppid() == 1);  /* launchd 拉起时父进程是 launchd */
+
+    if (!is_launchd) {
+        /* 由 App spawn 的手动实例：安装 launchd 后退出，交给 launchd 常驻 */
+        int rc = ensure_launchd();
+        if (rc == 0) {
+            LOG("handoff to launchd, exiting");
+            return 0;
+        }
+        LOG("launchd install failed, run as manual instance");
+    }
+
+    kill_old_instance();  /* 清旧实例（launchd 拉起时清理残留） */
 
     if (hid_init() != 0) { LOG("hid_init failed"); return 1; }
 

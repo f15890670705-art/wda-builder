@@ -84,18 +84,24 @@ static void *http_thread(void *arg) {
     return NULL;  /* HTTP 由 root 引擎提供 */
 }
 
-/* ---------- watchdog：引擎崩溃自动重新拉起 ---------- */
+/* ---------- watchdog：检查引擎 8080，不通则重新安装拉起（launchd 负责常驻） ---------- */
+- (BOOL)engineAlive {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return NO;
+    struct sockaddr_in a = {0};
+    a.sin_family = AF_INET;
+    a.sin_port = htons(8080);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    int ok = (connect(fd, (struct sockaddr*)&a, sizeof(a)) == 0);
+    close(fd);
+    return ok;
+}
+
 - (void)startWatchdog {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
         while (YES) {
-            if (self.enginePid > 0) {
-                if (kill(self.enginePid, 0) != 0) {
-                    NSLog(@"[AilinTouch] engine dead (pid %d), respawn...", self.enginePid);
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        self.enginePid = [self spawnEngineAsRoot];
-                    });
-                }
-            } else {
+            if (![self engineAlive]) {
+                NSLog(@"[AilinTouch] engine 8080 down, reinstall+spawn...");
                 dispatch_async(dispatch_get_main_queue(), ^{
                     self.enginePid = [self spawnEngineAsRoot];
                 });

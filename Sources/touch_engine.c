@@ -30,6 +30,7 @@
 #include <signal.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/stat.h>
 #include <pthread.h>
 #include <mach/mach_time.h>
 #include <CoreFoundation/CoreFoundation.h>

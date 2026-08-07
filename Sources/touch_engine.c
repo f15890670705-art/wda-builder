@@ -17,6 +17,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <dispatch/dispatch.h>
 #include <mach/mach_time.h>
 #include <CoreFoundation/CoreFoundation.h>
 
@@ -178,11 +179,13 @@ static void do_swipe(float x1, float y1, float x2, float y2, int ms) {
     send_digitizer(x2, y2, 3);
 }
 
-/* ---------- CFSocket 处理命令 ---------- */
-static void handle_cmd(int fd) {
+/* ---------- GCD dispatch source 监听 socket（自动集成到 main runloop） ---------- */
+static int g_listen_fd = -1;
+
+static void handle_client(int cfd) {
     char buf[256] = {0};
-    ssize_t n = read(fd, buf, sizeof(buf)-1);
-    if (n <= 0) return;
+    ssize_t n = read(cfd, buf, sizeof(buf)-1);
+    if (n <= 0) { close(cfd); return; }
     char cmd[16] = {0}; float a=0,b=0,c=0,d=0; int ms=300;
     sscanf(buf, "%15s %f %f %f %f %d", cmd, &a, &b, &c, &d, &ms);
     char reply[160];
@@ -196,34 +199,37 @@ static void handle_cmd(int fd) {
         snprintf(reply, sizeof(reply), "engine=ready senderid=%llx fallback=%llx seq=%d\n",
             (unsigned long long)g_sender_id, (unsigned long long)s, g_seq);
     } else snprintf(reply, sizeof(reply), "ERR unknown\n");
-    write(fd, reply, strlen(reply));
-}
-
-/* CFSocket 数据回调（CFSocket 在 runloop 上接收客户端数据） */
-static void client_data_cb(CFSocketRef s, CFSocketCallType type, CFDataRef addr, const void *data, void *info) {
-    int fd = CFSocketGetNative(s);
-    if (type == kCFSocketDataCallBack) handle_cmd(fd);
-    close(fd);
-    CFSocketInvalidate(s);  /* 一个连接一个 socket，处理完关闭 */
+    write(cfd, reply, strlen(reply));
+    close(cfd);
 }
 
 /* CFSocket accept 回调（监听 socket 收到新连接） */
-static void accept_cb(CFSocketRef s, CFSocketCallType type, CFDataRef addr, const void *data, void *info) {
-    if (type != kCFSocketAcceptCallBack) return;
-    CFSocketNativeHandle fd = CFSocketAccept(s, NULL, NULL);
-    if (fd < 0) return;
+static void handle_client(int cfd) {
+    char buf[256] = {0};
+    ssize_t n = read(cfd, buf, sizeof(buf)-1);
+    if (n <= 0) { close(cfd); return; }
+    char cmd[16] = {0}; float a=0,b=0,c=0,d=0; int ms=300;
+    sscanf(buf, "%15s %f %f %f %f %d", cmd, &a, &b, &c, &d, &ms);
+    char reply[160];
+    if (strcmp(cmd, "TAP") == 0 && n > 4) { do_tap(a,b); snprintf(reply, sizeof(reply), "OK\n"); }
+    else if (strcmp(cmd, "SWIPE") == 0) { do_swipe(a,b,c,d,ms); snprintf(reply, sizeof(reply), "OK\n"); }
+    else if (strcmp(cmd, "DOWN") == 0) { send_digitizer(a,b,1); snprintf(reply, sizeof(reply), "OK\n"); }
+    else if (strcmp(cmd, "MOVE") == 0) { send_digitizer(a,b,2); snprintf(reply, sizeof(reply), "OK\n"); }
+    else if (strcmp(cmd, "UP") == 0)   { send_digitizer(a,b,3); snprintf(reply, sizeof(reply), "OK\n"); }
+    else if (strcmp(cmd, "STATUS") == 0) {
+        uint64_t s = g_sender_id ? g_sender_id : g_fallback_sender;
+        snprintf(reply, sizeof(reply), "engine=ready senderid=%llx fallback=%llx seq=%d\n",
+            (unsigned long long)g_sender_id, (unsigned long long)s, g_seq);
+    } else snprintf(reply, sizeof(reply), "ERR unknown\n");
+    write(cfd, reply, strlen(reply));
+    close(cfd);
+}
 
-    CFSocketContext ctx = {0, NULL, NULL, NULL, NULL};
-    CFSocketRef cli = CFSocketCreateWithNative(kCFAllocatorDefault, fd,
-        kCFSocketDataCallBack, client_data_cb, &ctx);
-    if (cli) {
-        CFRunLoopSourceRef src = CFSocketCreateRunLoopSource(kCFAllocatorDefault, cli, 0);
-        if (src) {
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), src, kCFRunLoopDefaultMode);
-            CFRelease(src);
-        }
-        /* 不要 release cli，否则会被回收 */
-    }
+static int g_listen_fd = -1;
+static void accept_event(void *ctx) {
+    (void)ctx;
+    int cfd = accept(g_listen_fd, NULL, NULL);
+    if (cfd >= 0) handle_client(cfd);
 }
 
 int main(int argc, char *argv[]) {
@@ -232,24 +238,26 @@ int main(int argc, char *argv[]) {
 
     if (hid_init() != 0) { LOG("hid_init failed"); return 1; }
 
-    /* Unix socket listener 注册到 main runloop */
+    /* Unix socket listener：用 GCD dispatch source 监听，自动集成到 main queue/runloop */
     unlink(SOCK_PATH);
-    int sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    g_listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     struct sockaddr_un addr = {0};
     addr.sun_family = AF_UNIX;
     strcpy(addr.sun_path, SOCK_PATH);
-    bind(sfd, (struct sockaddr*)&addr, sizeof(addr));
-    listen(sfd, 8);
+    bind(g_listen_fd, (struct sockaddr*)&addr, sizeof(addr));
+    listen(g_listen_fd, 8);
     chmod(SOCK_PATH, 0777);
 
-    CFSocketContext ctx = {0, NULL, NULL, NULL, NULL};
-    CFSocketRef listener = CFSocketCreateWithNative(kCFAllocatorDefault, sfd,
-        kCFSocketAcceptCallBack, accept_cb, &ctx);
-    CFRunLoopSourceRef src = CFSocketCreateRunLoopSource(kCFAllocatorDefault, listener, 0);
-    CFRunLoopAddSource(CFRunLoopGetCurrent(), src, kCFRunLoopDefaultMode);
-    LOG("listening on %s (CFRunLoop mode)", SOCK_PATH);
+    dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ,
+        (dispatch_fd_t)g_listen_fd, 0, dispatch_get_main_queue());
+    dispatch_source_set_event_handler(src, ^{
+        int cfd = accept(g_listen_fd, NULL, NULL);
+        if (cfd >= 0) handle_client(cfd);
+    });
+    dispatch_resume(src);
+    LOG("listening on %s (GCD main queue)", SOCK_PATH);
 
-    /* 跑 main runloop（HID client 和 listener 都挂这里） */
+    /* 启动 main runloop（HID client 挂在这里，dispatch source 也在主队列上被驱动） */
     CFRunLoopRun();
     return 0;
 }

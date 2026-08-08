@@ -54,6 +54,29 @@ static AppDelegate *g_delegate;
 
 @implementation AppDelegate
 
+/* 崩溃日志：App 异常退出时把原因写到 /tmp/ailintouch.crash，
+   引擎 /log 可读到（root 能读 /tmp），方便远程定位"悬浮球消失=App 被杀" */
+static void write_crash_log(NSString *why) {
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], why];
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/ailintouch.crash"];
+    if (!fh) {
+        [[NSFileManager defaultManager] createFileAtPath:@"/tmp/ailintouch.crash" contents:nil attributes:nil];
+        fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/ailintouch.crash"];
+    }
+    if (fh) {
+        [fh seekToEndOfFile];
+        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh closeFile];
+    }
+}
+
+static void crash_handler(NSException *ex) {
+    write_crash_log([NSString stringWithFormat:@"EXCEPTION %@ %@ %@",
+                     ex.name, ex.reason, ex.userInfo]);
+    write_crash_log([NSString stringWithFormat:@"STACK %@",
+                     [[ex callStackSymbols] componentsJoinedByString:@" | "]]);
+}
+
 /* App 回前台/活跃：重新确保悬浮球注册（SpringBoard 可能移除） */
 - (void)applicationDidBecomeActive:(UIApplication *)application {
     [FloatingWindowManager.shared reRegisterIfNeeded];
@@ -243,6 +266,9 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     self.nav.navigationBar.hidden = YES;     /* 自绘标题 */
     self.window.rootViewController = self.nav;
     [self.window makeKeyAndVisible];
+
+    /* 崩溃日志：注册 handler，App 被杀原因写到 /tmp 供引擎读取 */
+    NSSetUncaughtExceptionHandler(&crash_handler);
 
     /* 全局悬浮球（懒人同款 SBS 注册；点击暂时 toast "123"） */
     __weak typeof(self) ws0 = self;

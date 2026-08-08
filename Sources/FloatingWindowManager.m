@@ -102,9 +102,9 @@
         [self pollTouchFile];
     }];
 
-    /* 心跳：每 3 秒上报 App 存活到引擎日志（远程诊断）；
+    /* 心跳：每 5 秒上报 App 存活（远程诊断）；
        后台时幂等重注册（SBS register 幂等，重复注册无副作用，不会抖掉窗口） */
-    self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer *t) {
+    self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *t) {
         [self reportToEngine:@"hb-alive"];
         if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
             [self registerToSpringBoardWithRetry];
@@ -171,15 +171,28 @@
     return 0;
 }
 
-/* 带重试的注册：contextID 需要等 WindowServer 分配，首帧可能为 0，
-   每 0.3s 重试一次，最多 10 次（3 秒内一定能拿到） */
+/* 带次数上限的重试：contextID 需要等 WindowServer 分配，首帧可能为 0。
+   ⚠️ 必须有限次：无限递归 + 心跳每 3s 叠加 → 主队列无限堆积 → App 被
+   watchdog 杀死（v1.1.8 实测：reg-ok 后心跳消失 = App 被杀）。 */
 - (void)registerToSpringBoardWithRetry {
+    [self registerToSpringBoardAttempt:0];
+}
+
+- (void)registerToSpringBoardAttempt:(int)attempt {
+    if (!self.floatingWindow) return;
     unsigned int cid = [self windowContextID];
     if (cid == 0) {
+        if (attempt >= 5) {
+            /* 连续拿不到 cid：窗口 context 可能已被回收（后台常见），
+               重建窗口拿全新的 contextID 再注册 */
+            [self reportToEngine:@"cid-giveup-rebuild"];
+            [self rebuildFloatingWindow];
+            return;
+        }
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             if (!self.floatingWindow) return;
-            [self registerToSpringBoardWithRetry];
+            [self registerToSpringBoardAttempt:attempt + 1];
         });
         return;
     }
@@ -189,10 +202,8 @@
 - (void)registerToSpringBoard {
     unsigned int cid = [self windowContextID];
     if (cid == 0) {
-        /* cid 暂未分配：静默 return 会让球在 unregister 后永久消失，
-           必须走 registerToSpringBoardWithRetry 的重试路径 */
-        [self reportToEngine:@"cid-zero-retry"];
-        [self registerToSpringBoardWithRetry];
+        /* 静默返回：不递归（避免无限循环），由 retry 路径处理 */
+        [self reportToEngine:@"cid-zero"];
         return;
     }
 
@@ -221,6 +232,24 @@
     /* HUD 注册通知（懒人同款） */
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
         CFSTR("com.apple.hudservices.windowRegistered"), NULL, NULL, true);
+}
+
+/* 重建悬浮窗口：销毁旧窗口（含 contextID），创建全新窗口拿新 contextID。
+   后台时旧窗口的 CA context 会被 SpringBoard/WindowServer 回收，
+   重建是拿回有效 contextID 的唯一可靠办法。 */
+- (void)rebuildFloatingWindow {
+    if (!self.floatingWindow) return;
+    /* 先停掉旧 timer，showFloatingBall 会重建 */
+    [self.touchTimer invalidate];
+    self.touchTimer = nil;
+    [self.hbTimer invalidate];
+    self.hbTimer = nil;
+    [self unregisterFromSpringBoard];
+    self.floatingWindow.hidden = YES;
+    self.floatingWindow = nil;
+    self.ball = nil;
+    self.registered = NO;
+    [self showFloatingBall];
 }
 
 - (void)unregisterFromSpringBoard {

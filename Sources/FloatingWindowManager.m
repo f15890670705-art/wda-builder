@@ -66,33 +66,32 @@
 - (void)showFloatingBall {
     if (self.floatingWindow) return;
 
-    UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
-    if (!keyWindow) return;
+    /* TrollSpeed（TrollStore 生态悬浮 HUD 成熟实现，iOS 14 验证）标准姿势：
+       ① 全屏窗口（SBS 托管窗口 context 需要全屏）
+       ② windowLevel = 10000010（1000万级，盖过一切）
+       ③ ★makeKeyAndVisible★（只设 hidden=NO 的窗口没被 WindowServer 激活，
+          球注册了也不渲染 —— 这就是"点一下屏幕球才显示"的真相：触摸激活了窗口） */
+    CGFloat size = 56;
+    CGFloat x = 20;
+    CGFloat y = [UIScreen mainScreen].bounds.size.height / 2 - size;
 
-    /* ⚠️ 窗口就是 56×56 小窗口（v1.1.3-1.1.5 验证过能正常全局显示）！
-       v1.1.6 改全屏是错误决策——当时把"显示一下消失"误判为窗口非全屏问题，
-       真正元凶是 contextID 不稳定（v1.2.6 已修）。SBS 托管小窗口完全可行
-       （懒人悬浮球也是小窗口），窗口外区域天然穿透，不需要全屏。 */
-    CGFloat size = 56;                          /* 球尺寸 */
-    CGFloat x = 20;                             /* 初始靠左 */
-    CGFloat y = keyWindow.bounds.size.height / 2 - size;
-    CGRect ballFrame = CGRectMake(x, y, size, size);
-
-    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:ballFrame];
-    self.floatingWindow.windowLevel = UIWindowLevelStatusBar + 100;   /* 高过普通 App 窗口 */
+    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    self.floatingWindow.windowLevel = 10000010.0;   /* TrollSpeed 同款极高层级 */
     self.floatingWindow.backgroundColor = [UIColor clearColor];
-    /* 窗口外区域天然穿透（hitTest 不在窗口 bounds 内），只有球区域响应 */
     self.floatingWindow.hidden = NO;
 
-    /* 轻量 root VC 承载悬浮球（view 跟随窗口 56×56，球填满） */
+    /* 轻量 root VC 承载悬浮球（view 全屏透明，球是子视图） */
     UIViewController *vc = [UIViewController new];
     vc.view.backgroundColor = [UIColor clearColor];
     self.floatingWindow.rootViewController = vc;
 
-    FloatingBall *ball = [[FloatingBall alloc] initWithFrame:CGRectMake(0, 0, size, size)];
+    FloatingBall *ball = [[FloatingBall alloc] initWithFrame:CGRectMake(x, y, size, size)];
     ball.onTap = self.onTap;
     [vc.view addSubview:ball];
     self.ball = ball;
+
+    /* ★关键：makeKeyAndVisible 激活窗口（TrollSpeed 同款），否则窗口不被渲染 */
+    [self.floatingWindow makeKeyAndVisible];
 
     /* 立即注册（若 contextID 尚未分配会失败，走 retry 补齐） */
     [self registerToSpringBoardWithRetry];
@@ -125,12 +124,8 @@
     float x = 0, y = 0;
     if (sscanf(content.UTF8String, "%f %f", &x, &y) != 2) return;
 
-    /* 球的屏幕坐标 = 窗口 origin + ball.frame.origin（窗口就是球的位置，
-       ball.frame 相对 vc.view (0,0)，所以球屏幕坐标 = window origin） */
-    CGPoint ballOrigin = CGPointMake(self.floatingWindow.frame.origin.x + self.ball.frame.origin.x,
-                                     self.floatingWindow.frame.origin.y + self.ball.frame.origin.y);
-    CGRect ballFrame = CGRectMake(ballOrigin.x, ballOrigin.y,
-                                  self.ball.bounds.size.width, self.ball.bounds.size.height);
+    /* 球的屏幕坐标：窗口全屏，ball.frame 相对 vc.view（= 屏幕坐标） */
+    CGRect ballFrame = self.ball.frame;
     if (CGRectContainsPoint(ballFrame, CGPointMake(x, y))) {
         if (self.onTap) self.onTap();
     }

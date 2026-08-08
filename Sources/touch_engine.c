@@ -32,7 +32,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/var/mobile/ailintouch.stopped"
-#define ENGINE_VERSION "1.0.7"
+#define ENGINE_VERSION "1.0.8"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -454,9 +454,18 @@ int main(int argc, char *argv[]) {
 
     if (!is_launchd) {
         /* 由 App spawn 的手动实例：
-           1) 先杀旧实例（含 launchd 常驻的旧版本引擎，否则 8080 一直被旧代码占着）
-           2) 覆盖安装 launchd 配置（copy_self 会把新二进制拷到 INSTALL_PATH）
-           3) 退出交给 launchd 拉起新版本 */
+           1) 先 launchctl unload —— 停掉 launchd job，KeepAlive 不再用旧文件副本重启
+           2) 再杀旧实例（含 launchd 常驻的旧引擎，否则 8080 一直被旧代码占着）
+           3) 覆盖安装 launchd 配置（copy_self 把新二进制拷到 INSTALL_PATH）
+           4) 退出交给 launchd 拉起新版本 */
+        pid_t sp;
+        char *u[] = {"/bin/launchctl", "unload", LAUNCHD_PLIST, NULL};
+        if (posix_spawn(&sp, "/bin/launchctl", NULL, NULL, u, environ) == 0) {
+            int st = 0;
+            waitpid(sp, &st, 0);
+            LOG("launchctl unload rc=%d", WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+        }
+        usleep(200 * 1000);   /* 等 unload 生效，KeepAlive 不再拉旧副本 */
         kill_old_instance();
         usleep(200 * 1000);
         int rc = ensure_launchd();

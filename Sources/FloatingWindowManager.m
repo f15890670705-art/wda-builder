@@ -113,6 +113,26 @@
     self.floatingWindow.windowLevel = 20000002;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
 
+    /* ★ v1.6.3 照懒人反汇编铁证：SBS 托管窗口必须设置
+       _isWindowServerHostingManaged = YES —— 这是 iOS15+ 让 WindowServer
+       把窗口当作"托管窗口"分配【正确 contextID】的私有 flag！
+       懒人 MyCustomWindow 几十处引用该 flag（0x8126f 字符串 + 40+ selref）。
+       不设置 → _contextId 返回垃圾大数（设备日志 reg-ok-420595175 稳定 4 亿级，
+       不是 WindowServer contextID）→ SBS 注册无效 → 球不显示。
+       同时设置 _canShowWhileLocked（锁屏可见）。 */
+    @try {
+        [self.floatingWindow setValue:@YES forKey:@"_isWindowServerHostingManaged"];
+        [self reportToEngine:@"ws-hosted-yes"];
+    } @catch (NSException *e) {
+        [self reportToEngine:@"ws-hosted-fail"];
+    }
+    @try {
+        [self.floatingWindow setValue:@YES forKey:@"_canShowWhileLocked"];
+    } @catch (NSException *e) { }
+    @try {
+        [self.floatingWindow setValue:@YES forKey:@"_ignoresOcclusionReasons"];
+    } @catch (NSException *e) { }
+
     /* 轻量 root VC 承载悬浮球 */
     UIViewController *vc = [UIViewController new];
     vc.view.backgroundColor = [UIColor clearColor];

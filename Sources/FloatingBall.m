@@ -26,6 +26,18 @@
         circle.userInteractionEnabled = NO;
         [self addSubview:circle];
 
+        /* ⚠️ 持续渲染保活：SpringBoard 托管的窗口 context 在【无渲染活动】时会被
+           系统回收 → 悬浮球消失（用户观察到"点击一下球就一直存在，不点击就消失"
+           正是触摸产生渲染活动 vs 无渲染的差别）。加一个无限循环的阴影呼吸动画，
+           让 CA 每帧持续活跃，context 不被回收。幅度极小，视觉不可察觉。 */
+        CABasicAnimation *breath = [CABasicAnimation animationWithKeyPath:@"shadowOpacity"];
+        breath.fromValue = @(0.25);
+        breath.toValue = @(0.45);
+        breath.duration = 1.6;
+        breath.autoreverses = YES;
+        breath.repeatCount = INFINITY;
+        [circle.layer addAnimation:breath forKey:@"breath"];
+
         /* 图标：AilinTouch 的 A */
         _icon = [UIImageView new];
         _icon.translatesAutoresizingMaskIntoConstraints = NO;

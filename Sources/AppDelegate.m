@@ -11,6 +11,7 @@
 #import "ServiceManagerViewController.h"
 #import "FileViewerViewController.h"
 #import "LogViewerViewController.h"
+#import "DirListViewController.h"
 #import <sys/socket.h>
 #import <sys/un.h>
 #import <sys/stat.h>
@@ -266,8 +267,9 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [ws.nav pushViewController:vc animated:YES];
     };
     self.serviceVC.onTapWorkDir = ^{
-        UIViewController *vc = [[FileViewerViewController alloc]
-            initWithTitle:@"工作目录" path:@"/var/mobile/" showTail:NO];
+        /* 走 HTTP /dir：root 引擎列目录返回，App 不用 root */
+        DirListViewController *vc = [DirListViewController new];
+        vc.endpointURL = @"http://127.0.0.1:8080/dir?path=/var/mobile/ailintouch";
         [ws.nav pushViewController:vc animated:YES];
     };
 

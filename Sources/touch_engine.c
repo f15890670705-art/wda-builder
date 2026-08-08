@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
@@ -25,14 +26,16 @@
 extern char **environ;
 
 #define SOCK_PATH "/tmp/ailintouch.sock"
-#define LOG_PATH  "/tmp/ailintouch_engine.log"
+#define DATA_ROOT "/var/mobile/ailintouch"
+#define LOG_PATH  DATA_ROOT "/logs/ailintouch_engine.log"
+#define LOG_PATH_TMP "/tmp/ailintouch_engine.log"
 #define PID_PATH  "/tmp/ailintouch_engine.pid"
 #define HTTP_PORT 8080
 #define INSTALL_PATH  "/var/mobile/ailintouch_engine"
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.0.9"
+#define ENGINE_VERSION "1.0.10"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -41,6 +44,34 @@ static void dlog(const char *fmt, ...) {
     fprintf(logfp, "\n"); fflush(logfp);
 }
 #define LOG(fmt, ...) dlog(fmt, ##__VA_ARGS__)
+
+/* 创建数据区目录结构（launchd 实例 = root 无 sandbox 可建；App spawn 实例 sandbox 内失败则日志落 /tmp） */
+static void ensure_data_dirs(void) {
+    const char *dirs[] = {
+        DATA_ROOT "/logs",
+        DATA_ROOT "/scripts",
+        DATA_ROOT "/libs",
+        DATA_ROOT "/config",
+        DATA_ROOT "/cache",
+        DATA_ROOT "/work",
+    };
+    for (size_t i = 0; i < sizeof(dirs)/sizeof(dirs[0]); i++) {
+        mkdir(dirs[i], 0755);
+    }
+}
+
+static void open_log(void) {
+    ensure_data_dirs();
+    logfp = fopen(LOG_PATH, "a");
+    if (!logfp) {
+        /* sandbox 实例（App spawn）写不了 /var/mobile，降级 /tmp */
+        logfp = fopen(LOG_PATH_TMP, "a");
+        if (!logfp) {
+            fprintf(stderr, "[AilinTouch] FATAL: cannot open log (%s / %s): %s\n",
+                    LOG_PATH, LOG_PATH_TMP, strerror(errno));
+        }
+    }
+}
 
 static void *io_handle;
 static void *hid_client;
@@ -266,10 +297,11 @@ static void handle_client(int cfd) {
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                 dl, dbuf);
         } else if (strncmp(path, "/log", 4) == 0) {
-            /* 返回引擎日志尾部 80 行，方便远程排查 */
+            /* 返回引擎日志尾部 80 行（持久区优先，sandbox 实例降级 /tmp） */
             char lbuf[8192] = {0};
             size_t ln = 0;
             FILE *lf = fopen(LOG_PATH, "r");
+            if (!lf) lf = fopen(LOG_PATH_TMP, "r");
             if (lf) {
                 ln = fread(lbuf, 1, sizeof(lbuf) - 1, lf);
                 fclose(lf);
@@ -286,6 +318,46 @@ static void handle_client(int cfd) {
             snprintf(reply, sizeof(reply),
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                 tl, tail);
+        } else if (strncmp(path, "/dir", 4) == 0) {
+            /* /dir?path=/var/mobile/ailintouch  列出目录（root 引擎读，App 免 root） */
+            char dirp[512] = {0};
+            if (sscanf(path, "/dir?path=%511[^\r\n]", dirp) != 1 || dirp[0] != '/') {
+                snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\nConnection: close\r\n\r\nbad path\n");
+            } else {
+                DIR *d = opendir(dirp);
+                if (!d) {
+                    char emsg[256];
+                    snprintf(emsg, sizeof(emsg), "error: cannot open %s (%s)\n", dirp, strerror(errno));
+                    size_t el = strlen(emsg);
+                    snprintf(reply, sizeof(reply),
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                        el, emsg);
+                } else {
+                    /* 收集到字符串：名字+类型+大小，按行 */
+                    char dbuf[4096] = {0};
+                    size_t off = 0;
+                    struct dirent *e;
+                    while ((e = readdir(d)) != NULL && off < sizeof(dbuf) - 200) {
+                        if (e->d_name[0] == '.') continue;   /* 跳过隐藏 */
+                        char full[600];
+                        snprintf(full, sizeof(full), "%s/%s", dirp, e->d_name);
+                        struct stat st;
+                        if (stat(full, &st) == 0) {
+                            if (S_ISDIR(st.st_mode))
+                                off += snprintf(dbuf + off, sizeof(dbuf) - off, "[D] %s/\n", e->d_name);
+                            else
+                                off += snprintf(dbuf + off, sizeof(dbuf) - off, "[F] %s  %lld\n", e->d_name, (long long)st.st_size);
+                        } else {
+                            off += snprintf(dbuf + off, sizeof(dbuf) - off, "[?] %s\n", e->d_name);
+                        }
+                    }
+                    closedir(d);
+                    size_t dl = strlen(dbuf);
+                    snprintf(reply, sizeof(reply),
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                        dl, dbuf);
+                }
+            }
         } else if (strncmp(path, "/key", 4) == 0) {
             /* /key?name=home 或 /key?page=0xC&usage=0x40 */
             char name[32] = {0};
@@ -435,14 +507,8 @@ static int ensure_launchd(void) {
 }
 
 int main(int argc, char *argv[]) {
-    logfp = fopen(LOG_PATH, "a");  /* append，保留历史日志 */
-    if (!logfp) {
-        /* fopen 失败（iOS 沙箱/权限），双写 stderr 兜底 + 立刻返回错误给 syscall */
-        fprintf(stderr, "[AilinTouch] FATAL: fopen LOG_PATH=%s failed: %s (errno=%d)\n",
-                LOG_PATH, strerror(errno), errno);
-    }
-    LOG("touch_engine v%s start uid=%d ppid=%d errno_at_log_open=%d",
-        ENGINE_VERSION, getuid(), getppid(), logfp ? 0 : errno);
+    open_log();  /* 数据区日志，sandbox 实例降级 /tmp */
+    LOG("touch_engine v%s start uid=%d ppid=%d", ENGINE_VERSION, getuid(), getppid());
 
     /* 用户手动停止后留下的标记：被 launchd 竞态拉起也立即退出，不提供 HTTP */
     if (access(STOPPED_MARKER, F_OK) == 0) {

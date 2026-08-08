@@ -13,6 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (instancetype)shared;
 - (void)showFloatingBall;
 - (void)hideFloatingBall;
+- (void)reRegisterIfNeeded;
 @end
 
 NS_ASSUME_NONNULL_END

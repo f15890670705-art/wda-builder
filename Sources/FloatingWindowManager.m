@@ -68,22 +68,24 @@
 }
 
 /* v1.5.2: iOS 13+ scene 模式下 UIWindow 必须绑定 windowScene 才能显示。
-   AilinTouchSceneDelegate 调用时传当前 scene。 */
+   AilinTouchSceneDelegate 调用时传当前 scene。
+   v1.5.4: 窗口改回【全屏透明】+ 球子视图（懒人同款）。v1.2.7 的 56×56 小窗口
+   context 不稳定——SBS 托管的 context 需要全屏窗口才稳定全局显示，
+   切主界面"挺一会"就没了 = 小窗口 context 被回收。全屏窗口 + hitTest 穿透
+   （FloatingBallWindow 已实现：命中自身/透明背景返回 nil）不影响点击。 */
 - (void)showFloatingBallInScene:(UIWindowScene *)windowScene {
     if (self.floatingWindow) return;
 
-    /* 回退 v1.2.7：56×56 小窗口 + hidden=NO。
-       v1.2.8 的 makeKeyAndVisible 抢走 key window 造成回归（点击了球也没了），
-       回退到"至少点击能活"的形态。 */
     UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
     if (!keyWindow) return;
 
     CGFloat size = 56;                          /* 球尺寸 */
     CGFloat x = 20;                             /* 初始靠左 */
     CGFloat y = keyWindow.bounds.size.height / 2 - size;
-    CGRect ballFrame = CGRectMake(x, y, size, size);
 
-    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:ballFrame];
+    /* ★ v1.5.4: 全屏透明窗口（懒人姿势）—— SBS 托管 context 稳定；
+       球作为子视图放左上，FloatingBallWindow.hitTest 全屏穿透 */
+    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:keyWindow.bounds];
     /* ★ iOS 13+ scene 生命周期：窗口必须绑 windowScene，否则不显示（v1.5.2） */
     if (windowScene) {
         self.floatingWindow.windowScene = windowScene;
@@ -92,12 +94,12 @@
     self.floatingWindow.backgroundColor = [UIColor clearColor];
     self.floatingWindow.hidden = NO;
 
-    /* 轻量 root VC 承载悬浮球（view 跟随窗口 56×56，球填满） */
+    /* 轻量 root VC 承载悬浮球 */
     UIViewController *vc = [UIViewController new];
     vc.view.backgroundColor = [UIColor clearColor];
     self.floatingWindow.rootViewController = vc;
 
-    FloatingBall *ball = [[FloatingBall alloc] initWithFrame:CGRectMake(0, 0, size, size)];
+    FloatingBall *ball = [[FloatingBall alloc] initWithFrame:CGRectMake(x, y, size, size)];
     ball.onTap = self.onTap;
     [vc.view addSubview:ball];
     self.ball = ball;
@@ -111,13 +113,15 @@
         [self pollTouchFile];
     }];
 
-    /* 心跳：每 5 秒只上报 App 存活（远程诊断）。
-       ⚠️ 后台绝不注册/重建窗口！后台 App 的窗口拿不到 contextID，
-       注册失败 → rebuild → 新窗口后台又拿不到 → 死循环（v1.1.9 实测）。
-       已注册的托管窗口由 SpringBoard 自己管，回前台时再重注册。 */
+    /* ★ v1.5.4: 心跳每 5 秒【重新注册 SBS】（幂等，懒人同款反复 register 保持）。
+       之前心跳只上报存活不注册 → SBS 托管被 SpringBoard 回收后没有恢复
+       → 第二次启动变内部球。register 幂等无副作用，重复注册同一 cid OK。 */
     self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *t) {
         [self reportToEngine:@"hb-alive"];
-        /* 后台不碰窗口，保持现有托管状态 */
+        if ([UIApplication sharedApplication].applicationState == UIApplicationStateActive) {
+            [self registerToSpringBoardWithRetry];
+        }
+        /* 后台不注册（后台窗口拿不到 contextID），保持已托管状态，回前台恢复 */
     }];
     [self reportToEngine:@"ball-shown"];
 }

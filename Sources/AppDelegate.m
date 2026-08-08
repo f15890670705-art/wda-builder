@@ -90,8 +90,13 @@ static void crash_handler(NSException *ex) {
                      [[ex callStackSymbols] componentsJoinedByString:@" | "]]);
 }
 
-/* App 回前台/活跃：无需处理（悬浮球由独立 HUD 进程持有，与 App 生命周期无关） */
+/* ★ v1.5.4: App 回前台必须重新注册 SBS（懒人方案球在 App 内）。
+   现象：第一次 SBS 注册成功（球能上桌面）→ 切后台 SpringBoard 回收托管
+   → 再进 App 没人重新注册 → 球退化成 App 内普通窗口。
+   v1.1.x 的 FloatingWindowManager.reRegisterIfNeeded 就是干这个的，
+   v1.5.x 改独立 HUD 时删掉了，v1.5.4 恢复。 */
 - (void)applicationDidBecomeActive:(UIApplication *)application {
+    [[FloatingWindowManager shared] reRegisterIfNeeded];
 }
 
 #pragma mark root spawn

@@ -121,21 +121,17 @@
     CGRect full = windowScene ? windowScene.coordinateSpace.bounds : [UIScreen mainScreen].bounds;
     CGFloat y = full.size.height / 2 - size;
 
-    /* ★ v1.6.7 铁证修正：窗口必须绑 windowScene（initWithWindowScene:）！
-       v1.6.5/v1.6.6 照懒人"initWithFrame: 不绑 scene"实测失败：
-       设备日志 cid-zero-_contextId（_contextId 返回 0 = 窗口根本没被
-       WindowServer 接受 → 球完全消失，用户实测）。原因：懒人是不绑 scene
-       的纯 daemon（SpringBoard 直接拉起、无前台 scene），而我们 App 是
-       scene 模式前台 App，窗口不绑 scene 就不显示。
-       正确做法（回到 v1.6.4 验证过的）：initWithWindowScene: 绑 scene →
-       窗口显示 + _contextId 有大数（420595175，iOS15+ 大数是有效 contextID，
-       v1.6.4 误判它是垃圾！）→ SBS 注册有效。 */
-    self.floatingWindow = [[FloatingBallWindow alloc] initWithWindowScene:windowScene];
-    if (!self.floatingWindow) {
-        /* 兜底：scene 为 nil 时退回旧姿势 */
-        self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
-        self.floatingWindow.windowScene = windowScene;
-    }
+    /* ★ v1.7.1 照懒人 setupHUDWindow 反汇编铁证：窗口【不绑 windowScene】！
+       懒人窗口 = [[MyCustomWindow alloc] initWithFrame:UIScreen.mainScreen.bounds]
+       + makeKeyAndVisible —— daemon 身份下窗口由 WindowServer 直接托管，
+       【不经 scene 生命周期】→ scene 挂起不影响 → 球全局持久。
+       v1.6.6 不绑 scene 失败（cid=0 球消失）是因为当时 SpringBoard 还没
+       重新加载 daemon 配置（未重启手机）。用户铁证"第一次安装时全局"=
+       安装瞬间 daemon 生效。v1.7.1 恢复不绑 scene + 装机后重启手机
+       （SpringBoard 重读 SBAppIsDaemon/LaunchAtBoot）→ daemon 生效 →
+       窗口系统级 → 球全局。 */
+    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
+    /* ⚠️ 不设置 windowScene —— 照懒人，daemon 窗口由 WindowServer 直接托管 */
     self.floatingWindow.windowLevel = 20000002;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
 

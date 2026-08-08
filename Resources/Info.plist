@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.5.0</string>
+	<string>1.5.1</string>
 	<key>CFBundleVersion</key>
-	<string>1.5.0</string>
+	<string>1.5.1</string>
 	<key>CFBundleSupportedPlatforms</key>
 	<array>
 		<string>iPhoneOS</string>
@@ -124,8 +124,12 @@
 	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
+		<!-- ⭐ v1.5.1: 改为 true —— 主 App 前台占 scene 时，HUD 进程（同一 bundle）
+		     也能请求到第二个 scene（floatball 方案成立的前提是主进程不占 scene，
+		     而我们的主 App 是用户打开的前台 App，会占用 com.ailintouch.iphone 的
+		     唯一 scene → HUD 的 UIApplicationMain 卡 booting 等不到连接） -->
 		<key>UIApplicationSupportsMultipleScenes</key>
-		<false/>
+		<true/>
 		<key>UISceneConfigurations</key>
 		<dict>
 			<key>UIWindowSceneSessionRoleApplication</key>

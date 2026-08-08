@@ -35,7 +35,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.2.2"
+#define ENGINE_VERSION "1.2.3"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -310,7 +310,7 @@ static void handle_client(int cfd) {
     ssize_t n = read(cfd, buf, sizeof(buf)-1);
     if (n <= 0) { close(cfd); return; }
 
-    char reply[256];
+    char reply[16384];   /* /log 返回尾部 80 行日志，必须大缓冲区（之前 256 截断） */
     /* HTTP 请求：GET /tap?x=..&y=.. HTTP/1.1 */
     if (strncmp(buf, "GET ", 4) == 0) {
         char path[256] = {0};
@@ -370,7 +370,7 @@ static void handle_client(int cfd) {
             }
         } else if (strncmp(path, "/log", 4) == 0) {
             /* 返回引擎日志尾部 80 行（持久区优先，sandbox 实例降级 /tmp） */
-            char lbuf[8192] = {0};
+            char lbuf[16384] = {0};
             size_t ln = 0;
             FILE *lf = fopen(LOG_PATH, "r");
             if (!lf) lf = fopen(LOG_PATH_TMP, "r");

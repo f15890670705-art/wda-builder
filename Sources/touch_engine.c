@@ -25,14 +25,14 @@
 extern char **environ;
 
 #define SOCK_PATH "/tmp/ailintouch.sock"
-#define LOG_PATH  "/var/mobile/ailintouch_engine.log"
-#define PID_PATH  "/var/mobile/ailintouch_engine.pid"
+#define LOG_PATH  "/tmp/ailintouch_engine.log"
+#define PID_PATH  "/tmp/ailintouch_engine.pid"
 #define HTTP_PORT 8080
 #define INSTALL_PATH  "/var/mobile/ailintouch_engine"
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
-#define STOPPED_MARKER "/var/mobile/ailintouch.stopped"
-#define ENGINE_VERSION "1.0.8"
+#define STOPPED_MARKER "/tmp/ailintouch.stopped"
+#define ENGINE_VERSION "1.0.9"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {

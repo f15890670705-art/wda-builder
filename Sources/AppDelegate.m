@@ -30,9 +30,9 @@
 
 #define SERVER_PORT       8080
 #define ENGINE_SOCK       "/tmp/ailintouch.sock"
-#define ENGINE_PID_PATH   @"/var/mobile/ailintouch_engine.pid"
-#define ENGINE_LOG_PATH   @"/var/mobile/ailintouch_engine.log"
-#define ENGINE_STOPPED    @"/var/mobile/ailintouch.stopped"
+#define ENGINE_PID_PATH   @"/tmp/ailintouch_engine.pid"
+#define ENGINE_LOG_PATH   @"/tmp/ailintouch_engine.log"
+#define ENGINE_STOPPED    @"/tmp/ailintouch.stopped"
 
 extern char **environ;
 static AppDelegate *g_delegate;

@@ -176,6 +176,23 @@
     [self reportToEngine:@"re-register"];
 }
 
+/* ★ v1.5.7 照懒人反编译（RootService 0x10004dc5c）方案：回前台/切后台只切
+   setHidden:BOOL，不重建窗口、不重新注册。懒人 BSServiceDomains + daemon 化
+   让 SBS context 永活，setHidden:NO 就能恢复显示。v1.5.5/v1.5.6 重建窗口
+   反而把稳定的 context 搞丢了。 */
+- (void)setWindowVisible:(BOOL)visible {
+    if (!self.floatingWindow) return;
+    if (self.floatingWindow.hidden == !visible) {
+        /* 状态没变，不动（避免无谓的刷新） */
+        [self reportToEngine:visible ? @"vis-already-yes" : @"vis-already-no"];
+        return;
+    }
+    self.floatingWindow.hidden = !visible;
+    [self reportToEngine:visible ? @"vis-on" : @"vis-off"];
+    /* ⚠️ 关键：不重建、不 unregister、不 reRegister。SBS context 留着，
+       跟懒人完全一致。 */
+}
+
 /* 取 UIWindow 的 contextID（懒人 safeGetWindowContextID 同思路） */
 - (unsigned int)windowContextID {
     if (!self.floatingWindow) return 0;

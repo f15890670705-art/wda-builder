@@ -90,13 +90,21 @@ static void crash_handler(NSException *ex) {
                      [[ex callStackSymbols] componentsJoinedByString:@" | "]]);
 }
 
-/* ★ v1.5.5: App 回前台必须【重建悬浮窗口】拿全新 contextID（懒人方案球在 App 内）。
-   现象（v1.5.4 实测）：切后台 SpringBoard 把托管 context 回收 → 回前台 reRegisterIfNeeded
-   用的是 cachedCid 缓存的【旧 cid】→ 已失效 → SBS 注册无效 → 球只剩 App 内。
-   v1.1.x 的 rebuildFloatingWindow 就是干这个的：前台重建窗口 → 拿全新 contextID →
-   重新注册。重建只在前台（后台重建死循环 v1.1.9 教训）。 */
+/* ★ v1.5.7 照懒人反编译（RootService 0x10004dc5c）方案修复。
+   懒人 applicationDidBecomeActive 实际只调 [self.window setHidden:NO] —— 关键
+   是【不重建窗口、不重新注册 SBS】！v1.5.5/v1.5.6 的 rebuild 思路完全反了。
+   原因：SBS 注册的 contextID 一旦稳定，SpringBoard 不会回收（懒人 BSServiceDomains
+   + SBAppIsDaemon + LaunchAtBoot 让 App 永驻，window 永在，context 永活）。
+   切后台 SpringBoard 不会销毁 SBS 托管，setHidden:NO 就能恢复显示。
+   回前台只 setHidden:NO 即可，跟懒人完全一致。 */
 - (void)applicationDidBecomeActive:(UIApplication *)application {
-    [[FloatingWindowManager shared] rebuildFloatingWindow];
+    [[FloatingWindowManager shared] setWindowVisible:YES];
+}
+
+/* ★ v1.5.7 新增：切后台懒人是 no-op（SBS 自己管理）。但我们保险起见也
+   调 setHidden:YES，避免后台时球被看到。 */
+- (void)applicationDidEnterBackground:(UIApplication *)application {
+    [[FloatingWindowManager shared] setWindowVisible:NO];
 }
 
 #pragma mark root spawn

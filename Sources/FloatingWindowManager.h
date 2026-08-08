@@ -15,6 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)showFloatingBallInScene:(UIWindowScene *)windowScene;   /* v1.5.2 iOS13+ 绑 scene */
 - (void)hideFloatingBall;
 - (void)reRegisterIfNeeded;
+- (void)setWindowVisible:(BOOL)visible;   /* v1.5.7 照懒人 setHidden:BOOL 切换可见性 */
 - (void)rebuildFloatingWindow;   /* v1.5.5: 回前台重建窗口拿全新 contextID */
 - (void)reportToEngine:(NSString *)msg;   /* App 状态上报到引擎日志（远程诊断） */
 @end

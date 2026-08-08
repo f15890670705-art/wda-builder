@@ -120,16 +120,21 @@
     CGRect full = windowScene ? windowScene.coordinateSpace.bounds : [UIScreen mainScreen].bounds;
     CGFloat y = full.size.height / 2 - size;
 
-    /* ★ v1.6.5 照懒人 setupHUDWindow (0x10004d6e8) 完整反汇编铁证改：
-       懒人窗口 = [[MyCustomWindow alloc] initWithFrame:UIScreen.mainScreen.bounds]
-       —— 【不绑定 windowScene】！懒人是 daemon（SBAppIsDaemon+HideAtLaunch），
-       窗口由 WindowServer 直接托管，不经过 scene 生命周期 → scene 挂起不影响。
-       v1.6.0 改成 initWithWindowScene: 把窗口绑到主 App 的 scene → 用户切后台
-       scene 挂起 → 窗口画面冻结 → SBS 托管失效 → 球消失 = 全局不持久的根因！
-       （配合 v1.6.5 禁用 touch monitor —— 懒人/AutoGo 都无引擎级 HID 旁听，
-       球点击用 UITapGestureRecognizer，见 FloatingBall.m） */
-    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
-    /* ⚠️ 故意不设置 windowScene —— 照懒人，窗口独立于 scene 由 WindowServer 托管 */
+    /* ★ v1.6.7 铁证修正：窗口必须绑 windowScene（initWithWindowScene:）！
+       v1.6.5/v1.6.6 照懒人"initWithFrame: 不绑 scene"实测失败：
+       设备日志 cid-zero-_contextId（_contextId 返回 0 = 窗口根本没被
+       WindowServer 接受 → 球完全消失，用户实测）。原因：懒人是不绑 scene
+       的纯 daemon（SpringBoard 直接拉起、无前台 scene），而我们 App 是
+       scene 模式前台 App，窗口不绑 scene 就不显示。
+       正确做法（回到 v1.6.4 验证过的）：initWithWindowScene: 绑 scene →
+       窗口显示 + _contextId 有大数（420595175，iOS15+ 大数是有效 contextID，
+       v1.6.4 误判它是垃圾！）→ SBS 注册有效。 */
+    self.floatingWindow = [[FloatingBallWindow alloc] initWithWindowScene:windowScene];
+    if (!self.floatingWindow) {
+        /* 兜底：scene 为 nil 时退回旧姿势 */
+        self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
+        self.floatingWindow.windowScene = windowScene;
+    }
     self.floatingWindow.windowLevel = 20000002;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
 
@@ -170,11 +175,16 @@
        SBS register 是幂等的（重复注册同一 contextID 无副作用），心跳持续
        register 保持托管即可；rebuild 只在 applicationDidBecomeActive 回前台时
        做一次（拿全新 contextID，v1.5.5 保留）。 */
+    /* ★ v1.6.7 照懒人铁证：心跳【不再 re-register】！
+       懒人 registerHUDWindow 只注册【一次】（daemon 永活，注册完就不动）。
+       我们 v1.5.4-v1.6.6 心跳每 5 秒 registerToSpringBoardWithRetry ——
+       每次 register 都会重新向 SpringBoard 提交托管，重复打断已有托管
+       → 球闪烁/全局显示几百ms就消失（SBS 托管反复重建）。
+       正确做法：注册一次成功后就保持，心跳只上报存活（诊断），不碰窗口。
+       SBS 托管由 SpringBoard 自己维持（懒人证明：注册一次 + daemon 永活）。 */
     self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *t) {
         [self reportToEngine:@"hb-alive"];
-        if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
-        /* 幂等重注册（cid 缓存复用，无副作用；不重建窗口） */
-        [self registerToSpringBoardWithRetry];
+        /* 不再 re-register —— 懒人注册一次，重复注册反而打断托管 */
     }];
     [self reportToEngine:@"ball-shown"];
 }

@@ -196,7 +196,10 @@
 
 /* ★ v1.6.1: UIRootWindowScenePresentationBinder 绑定（懒人/AutoGo 反汇编铁证）。
    创建 binder 实例，把窗口的 scene addScene: 进去 → 窗口显示在系统 root window
-   层。这是 iOS13+ 悬浮球"全局 + 持久"的核心机制，纯 SBS 注册做不到。 */
+   层。这是 iOS13+ 悬浮球"全局 + 持久"的核心机制，纯 SBS 注册做不到。
+   ⚠️ v1.6.2 修正：addScene: 需要的是【FBScene】（UIWindowScene 内部持有的
+   FrontBoard scene），直接传 UIWindowScene 会抛异常（设备日志 binder-exception）。
+   从 windowScene 取私有 _fbScene（或 _scene）再传。 */
 - (void)bindToRootWindowScene:(UIWindowScene *)windowScene {
     @try {
         Class binderCls = NSClassFromString(@"UIRootWindowScenePresentationBinder");
@@ -208,8 +211,23 @@
             self.rootBinder = [[binderCls alloc] init];
             [self reportToEngine:@"binder-created"];
         }
+        /* addScene: 参数 = FBScene（windowScene 的私有 _fbScene / _scene ivar） */
+        id fbScene = nil;
+        @try {
+            fbScene = [windowScene valueForKey:@"_fbScene"];
+        } @catch (NSException *e) { }
+        if (!fbScene) {
+            @try {
+                fbScene = [windowScene valueForKey:@"_scene"];
+            } @catch (NSException *e) { }
+        }
+        if (!fbScene) {
+            /* 兜底：直接传 windowScene 本身（部分 iOS 版本接受） */
+            fbScene = windowScene;
+            [self reportToEngine:@"binder-no-fbscene-fallback"];
+        }
         if ([self.rootBinder respondsToSelector:@selector(addScene:)]) {
-            [self.rootBinder addScene:windowScene];
+            [self.rootBinder addScene:fbScene];
             [self reportToEngine:@"binder-addscene-ok"];
         } else {
             [self reportToEngine:@"binder-no-addscene"];
@@ -340,11 +358,10 @@
         return;
     }
 
-    /* 复用同一个 controller 实例（懒人持有一个 controller 反复 register；
-       每次 alloc 新实例注册同一 cid 的行为不可预期） */
-    if (!self.hostingController) {
-        self.hostingController = [[cls alloc] init];
-    }
+    /* ★ v1.6.2 照懒人反汇编 tryRegisterWithAccessibilityController (0x10004d978)：
+       懒人【每次 alloc 新 controller】注册（bl alloc; bl init 存 ivar），不复用！
+       注释"复用同实例"是我之前理解错——SBS 托管窗口每次注册要新实例。 */
+    self.hostingController = [[cls alloc] init];
     /* ⚠️ v1.5.3: SBS 私有方法调用包 @try——iOS 版本差异/签名变化会直接崩 */
     @try {
         if ([self.hostingController respondsToSelector:@selector(registerWindowWithContextID:atLevel:)]) {
@@ -357,9 +374,15 @@
             [self reportToEngine:@"sbs-no-selector"];
         }
 
-        /* HUD 注册通知（懒人同款） */
+        /* ★ v1.6.2 照懒人 registerWindowWithFallback (0x10004db20) 反汇编：
+           懒人注册后发【两个】Darwin 通知：hudservices.windowRegistered +
+           springboard.hudwindow.registered（之前只发了第一个！）
+           SpringBoard 监听这些通知确认悬浮窗注册。 */
         CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
             CFSTR("com.apple.hudservices.windowRegistered"), NULL, NULL, true);
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+            CFSTR("com.apple.springboard.hudwindow.registered"), NULL, NULL, true);
+        [self reportToEngine:@"hud-notify-sent"];
     } @catch (NSException *e) {
         NSLog(@"[Floating] SBS register exception: %@", e);
         [self reportToEngine:@"sbs-reg-exception"];

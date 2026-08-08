@@ -92,6 +92,8 @@
 }
 
 - (void)handleTap {
+    /* 前台：ball 手势直接命中 → 清掉引擎监听写的文件，避免和轮询重复触发 */
+    [[NSFileManager defaultManager] removeItemAtPath:@"/tmp/ailintouch.touch" error:nil];
     if (self.onTap) self.onTap();
 }
 

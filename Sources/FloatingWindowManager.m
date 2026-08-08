@@ -21,6 +21,8 @@
 @interface FloatingWindowManager ()
 @property (nonatomic, strong) id hostingController;
 @property (nonatomic, assign) BOOL registered;
+@property (nonatomic, strong) FloatingBall *ball;
+@property (nonatomic, strong) NSTimer *touchTimer;
 @end
 
 @implementation FloatingWindowManager
@@ -56,16 +58,47 @@
     FloatingBall *ball = [[FloatingBall alloc] initWithFrame:CGRectMake(0, 0, size, size)];
     ball.onTap = self.onTap;
     [vc.view addSubview:ball];
+    self.ball = ball;
 
     /* 立即注册（若 contextID 尚未分配会失败，走 retry 补齐） */
     [self registerToSpringBoardWithRetry];
+
+    /* 触摸轮询：引擎(root)全局监听 HID 触摸，把坐标写 /tmp/ailintouch.touch，
+       App 每 50ms 读一次，命中球区域触发 onTap（懒人同款机制，后台也能点） */
+    self.touchTimer = [NSTimer scheduledTimerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *t) {
+        [self pollTouchFile];
+    }];
+}
+
+- (void)pollTouchFile {
+    if (!self.floatingWindow || !self.ball) return;
+    NSString *path = @"/tmp/ailintouch.touch";
+    NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    if (!content || content.length == 0) return;
+    /* 读完即删，防止重复触发 */
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+
+    float x = 0, y = 0;
+    if (sscanf(content.UTF8String, "%f %f", &x, &y) != 2) return;
+
+    /* 球的屏幕坐标 = floatingWindow.origin + ball.origin（window 非全屏，就是球的位置） */
+    CGPoint ballOrigin = CGPointMake(self.floatingWindow.frame.origin.x + self.ball.frame.origin.x,
+                                     self.floatingWindow.frame.origin.y + self.ball.frame.origin.y);
+    CGRect ballFrame = CGRectMake(ballOrigin.x, ballOrigin.y,
+                                  self.ball.bounds.size.width, self.ball.bounds.size.height);
+    if (CGRectContainsPoint(ballFrame, CGPointMake(x, y))) {
+        if (self.onTap) self.onTap();
+    }
 }
 
 - (void)hideFloatingBall {
     if (!self.floatingWindow) return;
+    [self.touchTimer invalidate];
+    self.touchTimer = nil;
     [self unregisterFromSpringBoard];
     self.floatingWindow.hidden = YES;
     self.floatingWindow = nil;
+    self.ball = nil;
 }
 
 /* App 回前台/活跃时调用：确保悬浮球仍注册在 SpringBoard（防止被移除） */

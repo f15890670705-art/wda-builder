@@ -35,7 +35,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.0.10"
+#define ENGINE_VERSION "1.1.5"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -93,6 +93,9 @@ typedef void  (*fn_Dispatch)(void*, void*);
 typedef void  (*fn_SetMatching)(void*, CFDictionaryRef);
 typedef void  (*fn_RegCB)(void*, void*, void*, void*);
 typedef void  (*fn_Schedule)(void*, CFRunLoopRef, CFStringRef);
+typedef int   (*fn_GetType)(void*);
+typedef long long (*fn_GetInteger)(void*, int);
+typedef double (*fn_GetFloat)(void*, int);
 
 static fn_CreateDigitizer p_CreateDigitizer;
 static fn_CreateFinger    p_CreateFinger;
@@ -105,6 +108,9 @@ static fn_Dispatch        p_Dispatch;
 static fn_SetMatching     p_SetMatching;
 static fn_RegCB           p_RegCB;
 static fn_Schedule        p_Schedule;
+static fn_GetType         p_GetType;
+static fn_GetInteger      p_GetInteger;
+static fn_GetFloat        p_GetFloat;
 
 static uint64_t boot_session_sender(void) {
     void *mg = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
@@ -120,6 +126,43 @@ static uint64_t boot_session_sender(void) {
     for (char *p = buf; *p; p++) { h ^= (unsigned char)*p; h *= 0x100000001b3ULL; }
     h |= 0x0000000080000000ULL;
     return h;
+}
+
+/* ---------- 全局触摸监听（懒人 isTouchFromEventInfo 同款） ----------
+   root 引擎注册 IOHIDEventSystemClientRegisterEventCallback，监听所有真实触摸，
+   把坐标写到 /tmp/ailintouch.touch，App 悬浮球读它判断是否命中球区域。
+   这样悬浮球不依赖窗口收触摸（后台窗口触摸 iOS 不路由给后台 App），
+   而是引擎在系统层旁听，命中就触发 App 动作 —— 懒人就是这么做的。 */
+
+/* 触摸回调：libIOMobileFramebuffer/IOHID 回调签名
+   (void *target, void *refcon, void *sender, IOHIDEventRef event) */
+static void touch_evt_cb(void *target, void *refcon, void *sender, void *event) {
+    if (!event || !p_GetType) return;
+    int t = p_GetType(event);
+    if (t != 11) return;                    /* kIOHIDEventTypeDigitizer = 11 */
+    if (!p_GetInteger || !p_GetFloat) return;
+
+    /* 阶段：1=began 2=moved 3=ended */
+    long long phase = p_GetInteger(event, 0x10007);   /* kIOHIDEventFieldDigitizerPhase */
+    if (phase != 1) return;                  /* 只关心手指按下 */
+
+    /* 排除引擎自己注入的事件（senderID 匹配时跳过），只旁听真实手指 */
+    if (p_GetSenderID) {
+        uint64_t sid = p_GetSenderID(event);
+        if (sid && (sid == g_sender_id || sid == g_fallback_sender)) return;
+    }
+
+    /* 坐标（points，屏幕物理坐标） */
+    double x = p_GetFloat(event, 0x10005);   /* kIOHIDEventFieldDigitizerX */
+    double y = p_GetFloat(event, 0x10006);   /* kIOHIDEventFieldDigitizerY */
+    if (x < 0 || y < 0) return;
+
+    /* 写共享文件：App 悬浮球轮询读取 */
+    FILE *tf = fopen("/tmp/ailintouch.touch", "w");
+    if (tf) {
+        fprintf(tf, "%.1f %.1f\n", x, y);
+        fclose(tf);
+    }
 }
 
 static int hid_init(void) {
@@ -141,12 +184,19 @@ static int hid_init(void) {
     p_SetMatching     = (fn_SetMatching)dlsym(io_handle, "IOHIDEventSystemClientSetMatching");
     p_RegCB           = (fn_RegCB)dlsym(io_handle, "IOHIDEventSystemClientRegisterEventCallback");
     p_Schedule        = (fn_Schedule)dlsym(io_handle, "IOHIDEventSystemClientScheduleWithRunLoop");
+    p_GetType         = (fn_GetType)dlsym(io_handle, "IOHIDEventGetType");
+    p_GetInteger      = (fn_GetInteger)dlsym(io_handle, "IOHIDEventGetIntegerValue");
+    p_GetFloat        = (fn_GetFloat)dlsym(io_handle, "IOHIDEventGetFloatValue");
 
     if (!p_CreateDigitizer || !p_CreateFinger || !p_Dispatch) {
         LOG("HID symbols missing"); return -4;
     }
 
-    if (p_RegCB) p_RegCB(hid_client, NULL, NULL, NULL);
+    if (p_RegCB) {
+        /* 注册真实回调：监听所有 digitizer 触摸（引擎 root + event-monitor entitlement） */
+        p_RegCB(hid_client, (void*)touch_evt_cb, NULL, NULL);
+        LOG("touch monitor registered (floating ball hit-test)");
+    }
     if (p_SetMatching) {
         int t = 11;
         CFStringRef k = CFSTR("IOHIDEventType");

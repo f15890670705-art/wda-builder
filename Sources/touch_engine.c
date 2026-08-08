@@ -36,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.7.3"
+#define ENGINE_VERSION "1.8.0"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -751,12 +751,14 @@ int main(int argc, char *argv[]) {
     dispatch_resume(tcp_src);
     LOG("HTTP listening on :%d (root)", HTTP_PORT);
 
-    /* v1.5.2: 不再拉起独立 HUD 进程 —— 悬浮球回到主 App 进程内
-       （照懒人方案：懒人 RootService 无独立悬浮球进程，球画在主 App + SBS 注册，
-       daemon 化后 launchd 常驻 → "卸载 App 球还在"）。
-       之前 ensure_hud 独立 HUD 方案裸进程拿不到 FrontBoard scene 一直卡 booting，
-       整个独立进程路线错误，v1.5.2 删除。 */
-    LOG("hud-in-app mode (v1.5.2), no separate HUD process");
+    /* ★ v1.8.0 恢复拉起独立悬浮球进程 AilinHUD（照懒人 RootCore 反汇编铁证）：
+       懒人 RootCore（com.nx.RootCore）= 独立 UIApplication 进程（@_UIApplicationMain
+       + FBSceneManager 二进制 scene + UIRootWindowScenePresentationBinder + SBS 注册）。
+       悬浮球挂在二进制 scene 上 → 独立于主 App 生命周期 → 全局持久 + 卸载球还在。
+       AilinHUD 放主 App bundle 根目录（共享 Info.plist = 已安装身份 + BSServiceDomains
+       → FrontBoard 给 scene，不再卡 booting）。v1.5.2 误删（当时缺 BSServiceDomains）。 */
+    ensure_hud();
+    LOG("hud-spawned (v1.8.0 RootCore-style)");
 
     /* HID client 已在 hid_init 里 Schedule 到 main runloop；启动 runloop 驱动它 */
     CFRunLoopRun();

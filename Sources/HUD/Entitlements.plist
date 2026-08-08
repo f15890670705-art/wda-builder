@@ -19,5 +19,27 @@
 	<true/>
 	<key>get-task-allow</key>
 	<true/>
+
+	<!-- ⭐ AutoGo 同款：窗口 context 可被 SpringBoard 显示（悬浮球显示关键） -->
+	<key>com.apple.QuartzCore.displayable-context</key>
+	<true/>
+
+	<!-- ⭐ 关闭沙盒：HUD 进程能写 /var/mobile/（懒人/AutoGo 同款） -->
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+
+	<!-- 全盘读写 -->
+	<key>com.apple.security.exception.files.absolute-path.read-write</key>
+	<array>
+		<string>/</string>
+	</array>
+
+	<!-- persona 管理：HUD 由 root 引擎 persona spawn，需配套权限 -->
+	<key>com.apple.private.persona-mgmt</key>
+	<true/>
+	<key>com.apple.system-task-ports</key>
+	<true/>
+	<key>com.apple.private.security.container-manager</key>
+	<true/>
 </dict>
 </plist>

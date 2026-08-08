@@ -23,6 +23,19 @@
     self.window.backgroundColor = [UIColor clearColor];
     self.window.windowLevel = 10000010.0;
 
+    /* ⭐ AutoGo agoverlayd 同款私有属性（懒人模式后台可点的关键）：
+       - _usesWindowServerHitTesting=YES → WindowServer 参与命中测试，
+         触摸事件直接路由给本进程窗口（即使进程在后台/非前台 App）
+       - _canShowWhileLocked → 锁屏也能显示悬浮球
+       - ignoreOcclusionReasons → 不被遮挡原因隐藏 */
+    @try {
+        [self.window setValue:@YES forKey:@"_usesWindowServerHitTesting"];
+        [self.window setValue:@YES forKey:@"_canShowWhileLocked"];
+        [self.window setValue:@YES forKey:@"ignoreOcclusionReasons"];
+    } @catch (NSException *e) {
+        NSLog(@"[AilinHUD] private window props set failed: %@", e);
+    }
+
     UIViewController *vc = [UIViewController new];
     vc.view.backgroundColor = [UIColor clearColor];
     self.window.rootViewController = vc;

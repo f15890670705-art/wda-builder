@@ -69,6 +69,12 @@
 		<string>kTCCServiceAll</string>
 	</array>
 
+	<!-- ========== 全局悬浮窗（懒人同款 SBSAccessibilityWindowHostingController） ========== -->
+	<key>com.apple.springboard.accessibility-window-hosting</key>
+	<true/>
+	<key>com.apple.springboard.hudwindow.registered</key>
+	<true/>
+
 	<!-- ========== root 引擎（touch_engine）相关 ========== -->
 	<!-- persona 管理：允许 posix_spawn persona(99)/uid 0 拉起 root 子进程（Ailin 同款） -->
 	<key>com.apple.private.persona-mgmt</key>

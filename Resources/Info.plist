@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.5.1</string>
+	<string>1.5.2</string>
 	<key>CFBundleVersion</key>
-	<string>1.5.1</string>
+	<string>1.5.2</string>
 	<key>CFBundleSupportedPlatforms</key>
 	<array>
 		<string>iPhoneOS</string>
@@ -94,8 +94,10 @@
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
 
-	<!-- ========== 后台常驻（保留常驻，去掉界面隐藏） ========== -->
+	<!-- ========== 后台常驻（懒人同款：daemon 化，launchd 管，iOS 不杀） ========== -->
 	<key>SBAppIsDaemon</key>
+	<true/>
+	<key>HideAtLaunch</key>
 	<true/>
 	<key>SpringBoard</key>
 	<dict>
@@ -105,6 +107,33 @@
 		<true/>
 		<key>RestartAfterCrash</key>
 		<true/>
+	</dict>
+
+	<!-- ★ v1.5.2 铁证：懒人(RootService)/AutoGo 都有 BSServiceDomains ——
+	     裸进程/App 连接 FrontBoard 的 domain 权限来源。
+	     v1.4.1 崩溃"FBServiceFacilityServer 需 frontboard.system-service domain"
+	     就是缺这个！照懒人原样抄。 -->
+	<key>BSServiceDomains</key>
+	<dict>
+		<key>com.apple.frontboard</key>
+		<dict>
+			<key>DerivedServiceRestrictions</key>
+			<dict>
+				<key>Services</key>
+				<dict>
+					<key>com.apple.frontboard.system-service</key>
+					<true/>
+					<key>com.apple.frontboard.workspace-service</key>
+					<true/>
+					<key>com.apple.frontboard.layout-monitor</key>
+					<true/>
+					<key>com.apple.uis.applicationStateService</key>
+					<true/>
+					<key>com.apple.uis.applicationSupportService</key>
+					<true/>
+				</dict>
+			</dict>
+		</dict>
 	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
@@ -124,12 +153,9 @@
 	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
-		<!-- ⭐ v1.5.1: 改为 true —— 主 App 前台占 scene 时，HUD 进程（同一 bundle）
-		     也能请求到第二个 scene（floatball 方案成立的前提是主进程不占 scene，
-		     而我们的主 App 是用户打开的前台 App，会占用 com.ailintouch.iphone 的
-		     唯一 scene → HUD 的 UIApplicationMain 卡 booting 等不到连接） -->
+		<!-- v1.5.2: 球回到 App 内（懒人方案），不需要多 scene -->
 		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
+		<false/>
 		<key>UISceneConfigurations</key>
 		<dict>
 			<key>UIWindowSceneSessionRoleApplication</key>

@@ -12,6 +12,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)shared;
 - (void)showFloatingBall;
+- (void)showFloatingBallInScene:(UIWindowScene *)windowScene;   /* v1.5.2 iOS13+ 绑 scene */
 - (void)hideFloatingBall;
 - (void)reRegisterIfNeeded;
 - (void)reportToEngine:(NSString *)msg;   /* App 状态上报到引擎日志（远程诊断） */

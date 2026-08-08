@@ -12,6 +12,7 @@
 #import "FileViewerViewController.h"
 #import "LogViewerViewController.h"
 #import "DirListViewController.h"
+#import "FloatingWindowManager.h"
 #import <AVFoundation/AVFoundation.h>
 #import <sys/socket.h>
 #import <sys/un.h>
@@ -302,6 +303,15 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     self.serviceVC = note.userInfo[@"serviceVC"];
 
     __weak typeof(self) ws = self;
+    /* ★ v1.5.2: 悬浮球点击回调 → 引擎命令（球在 App 内，FloatingWindowManager 管理）。
+       onTap 由引擎 HID 全局触摸监控驱动（引擎写 /tmp/ailintouch.touch，
+       App 轮询命中球区域触发），后台也能点。 */
+    [FloatingWindowManager shared].onTap = ^{
+        /* 点击悬浮球 → 通知引擎（后续可扩展为展开菜单/执行命令） */
+        [ws forwardToEngine:@"BALL_TAP\n"];
+        NSLog(@"[AilinTouch] ball tapped -> engine");
+    };
+
     self.serviceVC.onTapStart = ^{
         BOOL wasRunning = [ws engineAlive];
         [ws startService];
@@ -376,7 +386,8 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 #pragma mark Toast
 
 - (void)showToast:(NSString *)msg {
-    UIWindow *w = self.window;
+    /* v1.5.2: 窗口在 SceneDelegate 里，AppDelegate.window 是 nil —— 用 keyWindow */
+    UIWindow *w = [UIApplication sharedApplication].keyWindow;
     if (!w) return;
 
     UILabel *toast = [UILabel new];

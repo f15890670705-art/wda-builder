@@ -64,6 +64,12 @@
 }
 
 - (void)showFloatingBall {
+    [self showFloatingBallInScene:[[[UIApplication sharedApplication] connectedScenes] anyObject]];
+}
+
+/* v1.5.2: iOS 13+ scene 模式下 UIWindow 必须绑定 windowScene 才能显示。
+   AilinTouchSceneDelegate 调用时传当前 scene。 */
+- (void)showFloatingBallInScene:(UIWindowScene *)windowScene {
     if (self.floatingWindow) return;
 
     /* 回退 v1.2.7：56×56 小窗口 + hidden=NO。
@@ -78,6 +84,10 @@
     CGRect ballFrame = CGRectMake(x, y, size, size);
 
     self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:ballFrame];
+    /* ★ iOS 13+ scene 生命周期：窗口必须绑 windowScene，否则不显示（v1.5.2） */
+    if (windowScene) {
+        self.floatingWindow.windowScene = windowScene;
+    }
     self.floatingWindow.windowLevel = UIWindowLevelStatusBar + 100;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
     self.floatingWindow.hidden = NO;

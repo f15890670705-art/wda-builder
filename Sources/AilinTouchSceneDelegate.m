@@ -9,6 +9,7 @@
 #import "ATTabBarController.h"
 #import "ControlPanelViewController.h"
 #import "ServiceManagerViewController.h"
+#import "FloatingWindowManager.h"
 
 @implementation AilinTouchSceneDelegate
 
@@ -31,6 +32,14 @@
     nav.navigationBar.hidden = YES;     /* 自绘标题 */
     self.window.rootViewController = nav;
     [self.window makeKeyAndVisible];
+
+    /* ★ v1.5.2: 悬浮球回到 App 内（照懒人方案——懒人 RootService 没有独立 HUD
+       进程，球就在主 App 进程里画 + SBS 注册全局显示。App daemon 化后 launchd
+       常驻，iOS 不杀 → "卸载 App 球还在"）。
+       之前 v1.3.x-1.5.x 走独立 HUD 进程是错误方向：裸进程拿不到 FrontBoard scene
+       一直卡 booting。现在用 v1.1.x 验证过能显示的 FloatingWindowManager，
+       iOS 13+ 必须绑定当前 windowScene。 */
+    [[FloatingWindowManager shared] showFloatingBallInScene:(UIWindowScene *)scene];
 
     /* 通知 AppDelegate 接住 VC 引用（按钮回调 + 状态刷新用） */
     [[NSNotificationCenter defaultCenter]

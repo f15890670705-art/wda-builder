@@ -11,7 +11,6 @@
 # 无 Mac？用 .github/workflows/build-ipa.yml 在 GitHub Actions 免费云构建
 
 APP_NAME    = AilinTouch
-HUD_NAME    = AilinHUD
 BUILD_DIR   = build
 APP_DIR     = $(BUILD_DIR)/$(APP_NAME).app
 
@@ -35,9 +34,8 @@ APP_SOURCES  = Sources/main.m Sources/AppDelegate.m \
                Sources/ServiceManagerViewController.m \
                Sources/FileViewerViewController.m \
                Sources/LogViewerViewController.m \
-               Sources/DirListViewController.m
-HUD_SOURCES  = Sources/HUD/main.m Sources/HUD/HUDAppDelegate.m \
-               Sources/HUD/HUDSceneDelegate.m Sources/HUD/HUDBall.m
+               Sources/DirListViewController.m \
+               Sources/FloatingBall.m Sources/FloatingWindowManager.m
 ENGINE_SOURCE = Sources/touch_engine.c
 
 all: build sign ipa
@@ -46,30 +44,24 @@ build:
 	@mkdir -p $(APP_DIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(APP_SOURCES) -o $(APP_DIR)/$(APP_NAME)
 	$(CC) $(CFLAGS) $(ENGINE_SOURCE) -o $(APP_DIR)/touch_engine
-	# 编译悬浮球进程 AilinHUD —— ★ 直接放主 App bundle 根目录（照 AutoGo floatball：
-	#   共享主 App Info.plist = 已安装身份 → FrontBoard 认 → scene 能分配）。
-	#   不再做独立 .app（独立 bundle FrontBoard 不认，v1.3.7-1.4.2 一路卡死的根因）
-	$(CC) $(CFLAGS) $(LDFLAGS) $(HUD_SOURCES) -o $(APP_DIR)/$(HUD_NAME)
+	# v1.5.2: 悬浮球回到主 App 进程内（懒人方案）——不再编译独立 AilinHUD.app。
+	# 反编译铁证：懒人 RootService 无独立悬浮球进程，球画在主 App + SBS 注册，
+	# daemon 化（SBAppIsDaemon+HideAtLaunch+BSServiceDomains）后 launchd 常驻。
 	@cp Resources/Info.plist $(APP_DIR)/Info.plist
-	# 复制 AppIcon PNG（Info.plist 用 CFBundleIconFiles 引用 AppIcon60x60 / AppIcon76x76 名字）
-	@cp -R Resources/AppIcon/*.png $(APP_DIR)/
-	# 后台保活静音音频（懒人同款：App 退后台循环播放静音，进程不挂起，悬浮球触摸可送达）
+	@cp Resources/AppIcon/*.png $(APP_DIR)/
 	@cp Resources/silence.wav $(APP_DIR)/
-	@echo "== build done (App + touch_engine + AilinHUD + icons + silence.wav) =="
+	@echo "== build done (App + touch_engine + icons + silence.wav) =="
 
 sign:
 	@echo "== signing App =="
 	ldid -SEntitlements.plist $(APP_DIR)/$(APP_NAME)
 	@echo "== signing touch_engine =="
 	ldid -SEntitlements.plist $(APP_DIR)/touch_engine
-	@echo "== signing AilinHUD =="
-	ldid -SEntitlements.plist $(APP_DIR)/$(HUD_NAME)
 	@chmod 755 $(APP_DIR)/touch_engine
-	@chmod 755 $(APP_DIR)/$(HUD_NAME)
 	@echo "== verify =="
 	@ldid -e $(APP_DIR)/$(APP_NAME) | grep -q "event-dispatch" && echo "OK: App event-dispatch" || echo "WARN: App event-dispatch missing"
 	@ldid -e $(APP_DIR)/touch_engine | grep -q "event-dispatch" && echo "OK: engine event-dispatch" || echo "WARN: engine event-dispatch missing"
-	@ldid -e $(APP_DIR)/$(HUD_NAME) | grep -q "accessibility-window-hosting" && echo "OK: HUD accessibility-window-hosting" || echo "WARN: HUD accessibility-window-hosting missing"
+	@ldid -e $(APP_DIR)/$(APP_NAME) | grep -q "accessibility-window-hosting" && echo "OK: App accessibility-window-hosting" || echo "WARN: App accessibility-window-hosting missing"
 
 ipa:
 	@rm -rf $(BUILD_DIR)/Payload

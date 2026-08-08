@@ -36,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.6.5"
+#define ENGINE_VERSION "1.6.6"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -172,16 +172,8 @@ static int hid_init(void) {
     void* (*cc)(void*) = dlsym(io_handle, "IOHIDEventSystemClientCreate");
     if (!cc) return -2;
 
-    /* ★ v1.6.5 实验（用户怀疑点）：完全禁用 touch monitor。
-       创建 IOHIDEventSystemClient + RegisterEventCallback 会向系统注册一个
-       HID 事件客户端——可能干扰系统对前台 App 窗口/SBS 托管的处理，导致
-       "有真实手指点击才全局显示几百ms、无点击就只 App 内部显示"。
-       本版跳过 client 创建/回调注册/Schedule，只保留 dlsym 符号（注入仍可用
-       的符号，但 client 为 NULL 时注入自动失效）。若实验证明 touch monitor
-       无关，下版恢复。 */
-    LOG("WARN: touch monitor DISABLED (v1.6.5 experiment)");
-    return 0;
-
+    /* ★ v1.6.6 恢复 touch monitor（点击模块）：v1.6.5 实验版禁用了它导致
+       球点击功能失效，用户要求恢复。窗口不绑 scene 的修复保留。 */
     hid_client = cc((void*)kCFAllocatorDefault);
     if (!hid_client) return -3;
 

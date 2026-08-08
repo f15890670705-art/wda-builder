@@ -36,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.3.0"
+#define ENGINE_VERSION "1.3.1"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -604,6 +604,10 @@ static int copy_hud_bundle(const char *src_dir) {
 
 /* 拉起 AilinHUD：先尝试从 App bundle 复制（手动实例），再 spawn。
    找不到 bundle 副本时直接 spawn 数据区已有副本（launchd 实例场景）。 */
+extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *, int, uid_t);
+extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *, uid_t);
+extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
+
 static void ensure_hud(void) {
     char src[1024] = {0};
     uint32_t sz = sizeof(src);
@@ -627,8 +631,13 @@ static void ensure_hud(void) {
         LOG("HUD binary missing: %s", HUD_DST_BIN);
         return;
     }
-    /* 先杀旧 HUD（防多开） */
-    system("pkill -f AilinHUD.app/AilinHUD 2>/dev/null");
+    /* 先杀旧 HUD（防多开）—— iOS 上 system() 不可用，用 posix_spawn pkill */
+    pid_t pk;
+    char *pka[] = {"/usr/bin/pkill", "-f", "AilinHUD.app/AilinHUD", NULL};
+    if (posix_spawn(&pk, "/usr/bin/pkill", NULL, NULL, pka, environ) == 0) {
+        int pst = 0;
+        waitpid(pk, &pst, 0);
+    }
     usleep(200 * 1000);
 
     pid_t pid;

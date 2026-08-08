@@ -404,9 +404,11 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         return;
     }
     self.keepAlivePlayer.numberOfLoops = -1;   /* 无限循环 */
-    self.keepAlivePlayer.volume = 0.0;         /* 静音（音量 0 依然占音频通道） */
+    /* ⚠️ 音量必须 = 1.0：silence.wav 本身是静音（全零 PCM），播放无声音；
+       若 volume=0 系统会判定"没有实际播放"→ 不维持后台运行 → 进程挂起 → 悬浮球触摸穿透 */
+    self.keepAlivePlayer.volume = 1.0;
     [self.keepAlivePlayer play];
-    NSLog(@"[KeepAlive] background audio started (silence loop)");
+    NSLog(@"[KeepAlive] background audio started (silence loop, vol=1.0)");
 }
 
 @end

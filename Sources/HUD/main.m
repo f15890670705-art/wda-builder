@@ -1,25 +1,40 @@
 //
 // AilinHUD main.m
 //
-// 独立悬浮球进程（懒人模式）：由 touch_engine（root daemon）spawn 拉起，
-// 不受主 App 生命周期影响 —— 卸载主 App 后 HUD 依然常驻。
-// HUD 自己是唯一 UI 进程，直接 makeKeyAndVisible（无主窗口冲突），
-// 用 TrollSpeed 验证过的 SBS 注册姿势全局显示悬浮球。
+// 独立悬浮球进程（懒人模式）：由 touch_engine（root daemon）spawn 拉起。
+// ★★ 必须先在 main 里调 FBSystemShellInitialize(nil) 初始化 FrontBoard 服务，
+//    裸 spawn 的进程才能连上系统场景服务（AutoGo agoverlayd / FrontBoardAppLauncher 同款）。
 //
 #import <UIKit/UIKit.h>
+#import <dlfcn.h>
 #import "HUDAppDelegate.h"
 
-/* 诊断辅助：每一步写入 /tmp/ailintouch_hud.alive，引擎 /hud 端点远程读。
-   区分 HUD 卡在哪一步：booting → main 进了；appdelegate → didFinish 跑了；
-   registered-cid=xxx → SBS 注册成功。 */
+/* 诊断辅助：每一步写入 /tmp/ailintouch_hud.alive，引擎 /hud 端点远程读 */
 static void hud_mark(NSString *msg) {
     [msg writeToFile:@"/tmp/ailintouch_hud.alive"
           atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
+/* FrontBoard 初始化（私有 API，运行时 dlopen 解析避免链接报错） */
+static void fb_init(void) {
+    void *h = dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
+    if (!h) {
+        hud_mark([NSString stringWithFormat:@"fb-dlopen-fail:%s", dlerror()]);
+        return;
+    }
+    void (*FBSystemShellInitialize)(void *opaque) = dlsym(h, "FBSystemShellInitialize");
+    if (FBSystemShellInitialize) {
+        FBSystemShellInitialize(NULL);
+        hud_mark(@"fb-inited");
+    } else {
+        hud_mark(@"fb-sym-missing");
+    }
+}
+
 int main(int argc, char *argv[]) {
     @autoreleasepool {
         hud_mark(@"booting");
+        fb_init();
         int rc = UIApplicationMain(argc, argv, nil,
             NSStringFromClass([HUDAppDelegate class]));
         hud_mark([NSString stringWithFormat:@"exited-%d", rc]);

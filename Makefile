@@ -38,7 +38,7 @@ APP_SOURCES  = Sources/main.m Sources/AppDelegate.m \
                Sources/DirListViewController.m \
                Sources/FloatingBall.m \
                Sources/FloatingWindowManager.m
-HUD_SOURCES  = Sources/HUD/main.m Sources/HUD/HUDAppDelegate.m Sources/HUD/HUDSceneDelegate.m Sources/HUD/HUDBall.m
+HUD_SOURCES  = Sources/HUD/main.m Sources/HUD/HUDAppDelegate.m Sources/HUD/HUDBall.m
 ENGINE_SOURCE = Sources/touch_engine.c
 
 all: build sign ipa

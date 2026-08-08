@@ -409,6 +409,24 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     self.keepAlivePlayer.volume = 1.0;
     [self.keepAlivePlayer play];
     NSLog(@"[KeepAlive] background audio started (silence loop, vol=1.0)");
+
+    /* 守护：AVAudioPlayer 可能被系统打断/停止（来电、其他 App 抢音频通道），
+       一旦停了 App 退后台就挂起 → 悬浮球消失。每 3 秒检查重新播放。 */
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [self startKeepAliveWatchdog];
+    });
+}
+
+- (void)startKeepAliveWatchdog {
+    if (self.keepAlivePlayer && !self.keepAlivePlayer.isPlaying) {
+        [self.keepAlivePlayer play];
+        NSLog(@"[KeepAlive] player stopped, re-play");
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [self startKeepAliveWatchdog];
+    });
 }
 
 @end

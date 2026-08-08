@@ -23,6 +23,7 @@
 @property (nonatomic, assign) BOOL registered;
 @property (nonatomic, strong) FloatingBall *ball;
 @property (nonatomic, strong) NSTimer *touchTimer;
+@property (nonatomic, strong) NSTimer *hbTimer;      /* 心跳：定期重注册 + 上报 App 存活（诊断） */
 @end
 
 @implementation FloatingWindowManager
@@ -34,28 +35,44 @@
     return inst;
 }
 
+/* App 状态上报到引擎日志（远程 curl /log 可查 App 生命周期/存活） */
+- (void)reportToEngine:(NSString *)msg {
+    NSString *enc = [msg stringByAddingPercentEncodingWithAllowedCharacters:
+                        [NSCharacterSet alphanumericCharacterSet]];
+    NSString *url = [NSString stringWithFormat:@"http://127.0.0.1:8080/applog?msg=%@", enc];
+    NSURLSessionDataTask *t = [[NSURLSession sharedSession]
+        dataTaskWithURL:[NSURL URLWithString:url] completionHandler:nil];
+    [t resume];
+}
+
 - (void)showFloatingBall {
     if (self.floatingWindow) return;
 
     UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
     if (!keyWindow) return;
 
-    /* 悬浮球尺寸 */
-    CGFloat size = 56;
-    CGFloat x = 20;                          /* 初始靠左 */
+    /* ⚠️ 窗口必须全屏：SBSAccessibilityWindowHostingController 托管的是窗口的
+       CA context，SpringBoard 对非全屏窗口 context 托管不稳定（显示一帧即被移除）。
+       悬浮球只是全屏透明窗口里的子视图，懒人 overlay window 也是全屏的。 */
+    CGFloat size = 56;                          /* 球尺寸 */
+    CGFloat x = 20;                             /* 初始靠左 */
     CGFloat y = keyWindow.bounds.size.height / 2 - size;
+    CGRect screen = keyWindow.bounds;
 
-    self.floatingWindow = [[UIWindow alloc] initWithFrame:CGRectMake(x, y, size, size)];
+    self.floatingWindow = [[UIWindow alloc] initWithFrame:screen];
     self.floatingWindow.windowLevel = UIWindowLevelStatusBar + 100;   /* 高过普通 App 窗口 */
     self.floatingWindow.backgroundColor = [UIColor clearColor];
+    /* 注意：不能设 userInteractionEnabled=NO（会连子视图 ball 一起禁掉）。
+       透明区域没有子视图 → hitTest 返回 nil → 触摸天然穿透到下层窗口，
+       只有命中 ball 的区域才被球拦截。 */
     self.floatingWindow.hidden = NO;
 
-    /* 轻量 root VC 只承载悬浮球 */
+    /* 轻量 root VC 承载悬浮球（view 全屏透明，球是子视图） */
     UIViewController *vc = [UIViewController new];
     vc.view.backgroundColor = [UIColor clearColor];
     self.floatingWindow.rootViewController = vc;
 
-    FloatingBall *ball = [[FloatingBall alloc] initWithFrame:CGRectMake(0, 0, size, size)];
+    FloatingBall *ball = [[FloatingBall alloc] initWithFrame:CGRectMake(x, y, size, size)];
     ball.onTap = self.onTap;
     [vc.view addSubview:ball];
     self.ball = ball;
@@ -68,6 +85,16 @@
     self.touchTimer = [NSTimer scheduledTimerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *t) {
         [self pollTouchFile];
     }];
+
+    /* 心跳：每 3 秒上报 App 存活到引擎日志（远程诊断）；
+       后台时强制重注册（SpringBoard 可能移除托管窗口，registered 标志不可靠） */
+    self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer *t) {
+        [self reportToEngine:@"hb-alive"];
+        if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
+            [self reRegisterForce];
+        }
+    }];
+    [self reportToEngine:@"ball-shown"];
 }
 
 - (void)pollTouchFile {
@@ -81,11 +108,8 @@
     float x = 0, y = 0;
     if (sscanf(content.UTF8String, "%f %f", &x, &y) != 2) return;
 
-    /* 球的屏幕坐标 = floatingWindow.origin + ball.origin（window 非全屏，就是球的位置） */
-    CGPoint ballOrigin = CGPointMake(self.floatingWindow.frame.origin.x + self.ball.frame.origin.x,
-                                     self.floatingWindow.frame.origin.y + self.ball.frame.origin.y);
-    CGRect ballFrame = CGRectMake(ballOrigin.x, ballOrigin.y,
-                                  self.ball.bounds.size.width, self.ball.bounds.size.height);
+    /* 球的屏幕坐标：窗口全屏，ball.frame 相对 vc.view（= 屏幕坐标） */
+    CGRect ballFrame = self.ball.frame;
     if (CGRectContainsPoint(ballFrame, CGPointMake(x, y))) {
         if (self.onTap) self.onTap();
     }
@@ -95,6 +119,8 @@
     if (!self.floatingWindow) return;
     [self.touchTimer invalidate];
     self.touchTimer = nil;
+    [self.hbTimer invalidate];
+    self.hbTimer = nil;
     [self unregisterFromSpringBoard];
     self.floatingWindow.hidden = YES;
     self.floatingWindow = nil;
@@ -104,8 +130,16 @@
 /* App 回前台/活跃时调用：确保悬浮球仍注册在 SpringBoard（防止被移除） */
 - (void)reRegisterIfNeeded {
     if (!self.floatingWindow) return;
-    if (self.registered) return;
-    [self registerToSpringBoardWithRetry];
+    [self reRegisterForce];
+}
+
+/* 强制重注册：先 unregister 再 register（SpringBoard 可能静默移除托管窗口，
+   registered 标志此时仍是 YES，必须无条件重注册） */
+- (void)reRegisterForce {
+    if (!self.floatingWindow) return;
+    [self unregisterFromSpringBoard];
+    [self registerToSpringBoard];
+    [self reportToEngine:@"re-register"];
 }
 
 /* 取 UIWindow 的 contextID（懒人 safeGetWindowContextID 同思路） */
@@ -142,13 +176,18 @@
 }
 
 - (void)registerToSpringBoard {
-    if (self.registered) return;
+    /* 去掉 if (self.registered) return —— SpringBoard 可能已移除托管但标志没重置，
+       心跳/回前台必须能无条件重注册 */
     unsigned int cid = [self windowContextID];
-    if (cid == 0) return;
+    if (cid == 0) {
+        [self reportToEngine:@"cid-zero"];
+        return;
+    }
 
     Class cls = NSClassFromString(@"SBSAccessibilityWindowHostingController");
     if (!cls) {
         NSLog(@"[Floating] SBSAccessibilityWindowHostingController not found");
+        [self reportToEngine:@"sbs-class-missing"];
         return;
     }
 
@@ -158,6 +197,9 @@
                                                    atLevel:self.floatingWindow.windowLevel];
         self.registered = YES;
         NSLog(@"[Floating] registered contextID=%u level=%.0f", cid, self.floatingWindow.windowLevel);
+        [self reportToEngine:[NSString stringWithFormat:@"reg-ok-%u", cid]];
+    } else {
+        [self reportToEngine:@"sbs-no-selector"];
     }
 
     /* HUD 注册通知（懒人同款） */

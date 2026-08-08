@@ -35,7 +35,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.1.5"
+#define ENGINE_VERSION "1.1.6"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -346,6 +346,26 @@ static void handle_client(int cfd) {
             snprintf(reply, sizeof(reply),
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                 dl, dbuf);
+        } else if (strncmp(path, "/applog", 7) == 0) {
+            /* App 端状态上报：GET /applog?msg=xxx → 写入引擎日志，远程可查 App 生命周期 */
+            const char *msg = strstr(path, "msg=");
+            if (msg) {
+                msg += 4;
+                /* URL 解码到临时缓冲（简单 %xx） */
+                char dec[512] = {0};
+                size_t di = 0;
+                for (; *msg && di < sizeof(dec)-1; msg++) {
+                    if (*msg == '%' && msg[1] && msg[2]) {
+                        int v = 0;
+                        if (sscanf(msg+1, "%2x", &v) == 1) { dec[di++] = (char)v; msg += 2; }
+                        else dec[di++] = *msg;
+                    } else dec[di++] = *msg;
+                }
+                LOG("[app] %s", dec);
+                snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"ok\":true}");
+            } else {
+                snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{\"ok\":false}");
+            }
         } else if (strncmp(path, "/log", 4) == 0) {
             /* 返回引擎日志尾部 80 行（持久区优先，sandbox 实例降级 /tmp） */
             char lbuf[8192] = {0};

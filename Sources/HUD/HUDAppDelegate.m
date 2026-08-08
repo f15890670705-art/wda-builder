@@ -18,6 +18,10 @@
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
 
+    /* 诊断：didFinish 已执行 */
+    [@"appdelegate\n" writeToFile:@"/tmp/ailintouch_hud.alive"
+                      atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
     /* 全屏透明窗口（TrollSpeed 姿势：全屏 + 极高 level + makeKeyAndVisible） */
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     self.window.backgroundColor = [UIColor clearColor];

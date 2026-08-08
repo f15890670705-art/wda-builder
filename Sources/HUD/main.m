@@ -9,9 +9,20 @@
 #import <UIKit/UIKit.h>
 #import "HUDAppDelegate.h"
 
+/* 诊断辅助：每一步写入 /tmp/ailintouch_hud.alive，引擎 /hud 端点远程读。
+   区分 HUD 卡在哪一步：booting → main 进了；appdelegate → didFinish 跑了；
+   registered-cid=xxx → SBS 注册成功。 */
+static void hud_mark(NSString *msg) {
+    [msg writeToFile:@"/tmp/ailintouch_hud.alive"
+          atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
 int main(int argc, char *argv[]) {
     @autoreleasepool {
-        return UIApplicationMain(argc, argv, nil,
+        hud_mark(@"booting");
+        int rc = UIApplicationMain(argc, argv, nil,
             NSStringFromClass([HUDAppDelegate class]));
+        hud_mark([NSString stringWithFormat:@"exited-%d", rc]);
+        return rc;
     }
 }

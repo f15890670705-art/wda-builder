@@ -36,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.3.6"
+#define ENGINE_VERSION "1.3.7"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -395,16 +395,26 @@ static void handle_client(int cfd) {
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                 tl, tail);
         } else if (strncmp(path, "/hud", 4) == 0) {
-            /* 远程诊断：HUD 存活标记 + spawn 日志（HUD 是独立进程，这里读它的存活文件） */
-            char hbuf[2048] = {0};
+            /* 远程诊断：HUD 存活标记 + 崩溃 stderr（HUD 是独立进程，这里读它的文件） */
+            char hbuf[4096] = {0};
             size_t hn = 0;
             FILE *hf = fopen("/tmp/ailintouch_hud.alive", "r");
             if (hf) {
                 hn = fread(hbuf, 1, sizeof(hbuf) - 1, hf);
                 fclose(hf);
             }
-            char haux[512] = {0};
-            snprintf(haux, sizeof(haux), "hud_alive_file=%s\n", hn > 0 ? hbuf : "(missing)");
+            char ebu[4096] = {0};
+            size_t en = 0;
+            FILE *ef = fopen("/tmp/ailintouch_hud.err", "r");
+            if (ef) {
+                en = fread(ebu, 1, sizeof(ebu) - 1, ef);
+                fclose(ef);
+            }
+            char haux[8192] = {0};
+            snprintf(haux, sizeof(haux),
+                "hud_alive=%s\nhud_err=%s\n",
+                hn > 0 ? hbuf : "(missing)",
+                en > 0 ? ebu : "(none)");
             size_t hl = strlen(haux);
             snprintf(reply, sizeof(reply),
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
@@ -666,7 +676,16 @@ static void ensure_hud(void) {
     posix_spawnattr_set_persona_uid_np(&attr, 0);
     posix_spawnattr_set_persona_gid_np(&attr, 0);
     posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | 0x100);
-    int rc = posix_spawn(&pid, HUD_DST_BIN, NULL, &attr, argv, environ);
+    /* stderr 重定向到 /tmp/ailintouch_hud.err —— HUD 崩溃/启动错误直接落盘，
+       引擎 /hud 端点可读（HUD 是独立进程，崩因只能这样拿） */
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 1, "/tmp/ailintouch_hud.err",
+                                     O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    posix_spawn_file_actions_addopen(&fa, 2, "/tmp/ailintouch_hud.err",
+                                     O_WRONLY | O_CREAT | O_APPEND, 0644);
+    int rc = posix_spawn(&pid, HUD_DST_BIN, &fa, &attr, argv, environ);
+    posix_spawn_file_actions_destroy(&fa);
     posix_spawnattr_destroy(&attr);
     if (rc == 0) {
         LOG("AilinHUD spawned pid=%d", pid);

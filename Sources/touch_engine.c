@@ -32,7 +32,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/var/mobile/ailintouch.stopped"
-#define ENGINE_VERSION "1.0.5"
+#define ENGINE_VERSION "1.0.7"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -249,6 +249,22 @@ static void handle_client(int cfd) {
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 200\r\nConnection: close\r\n\r\n"
                 "{\"engine\":\"root ready\",\"senderid\":\"%llx\",\"fallback\":\"%llx\",\"seq\":%d}",
                 (unsigned long long)g_sender_id, (unsigned long long)s, g_seq);
+        } else if (strncmp(path, "/diag", 5) == 0) {
+            /* 诊断：返回 LOG 状态、文件 stat、errno */
+            char dbuf[1024];
+            struct stat st;
+            int exists = (stat(LOG_PATH, &st) == 0);
+            snprintf(dbuf, sizeof(dbuf),
+                "{\"engine_ver\":\"%s\",\"log_path\":\"%s\",\"log_exists\":%s,\"log_size\":%lld,\"log_open_ok\":%s,\"errno_at_open\":%d}",
+                ENGINE_VERSION, LOG_PATH,
+                exists ? "true" : "false",
+                exists ? (long long)st.st_size : -1,
+                logfp ? "true" : "false",
+                logfp ? 0 : errno);
+            size_t dl = strlen(dbuf);
+            snprintf(reply, sizeof(reply),
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                dl, dbuf);
         } else if (strncmp(path, "/log", 4) == 0) {
             /* 返回引擎日志尾部 80 行，方便远程排查 */
             char lbuf[8192] = {0};
@@ -420,7 +436,13 @@ static int ensure_launchd(void) {
 
 int main(int argc, char *argv[]) {
     logfp = fopen(LOG_PATH, "a");  /* append，保留历史日志 */
-    LOG("touch_engine v%s start uid=%d ppid=%d", ENGINE_VERSION, getuid(), getppid());
+    if (!logfp) {
+        /* fopen 失败（iOS 沙箱/权限），双写 stderr 兜底 + 立刻返回错误给 syscall */
+        fprintf(stderr, "[AilinTouch] FATAL: fopen LOG_PATH=%s failed: %s (errno=%d)\n",
+                LOG_PATH, strerror(errno), errno);
+    }
+    LOG("touch_engine v%s start uid=%d ppid=%d errno_at_log_open=%d",
+        ENGINE_VERSION, getuid(), getppid(), logfp ? 0 : errno);
 
     /* 用户手动停止后留下的标记：被 launchd 竞态拉起也立即退出，不提供 HTTP */
     if (access(STOPPED_MARKER, F_OK) == 0) {

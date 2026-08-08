@@ -113,15 +113,15 @@
         [self pollTouchFile];
     }];
 
-    /* ★ v1.5.4: 心跳每 5 秒【重新注册 SBS】（幂等，懒人同款反复 register 保持）。
-       之前心跳只上报存活不注册 → SBS 托管被 SpringBoard 回收后没有恢复
-       → 第二次启动变内部球。register 幂等无副作用，重复注册同一 cid OK。 */
+    /* ★ v1.5.5: 心跳每 5 秒【前台重建窗口重新注册】（懒人同款保持）。
+       之前心跳只 register 用缓存 cid——后台回收后旧 cid 已失效，注册无效。
+       改为前台重建（拿全新 contextID），彻底解决"切后台再回来球没了"。 */
     self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *t) {
         [self reportToEngine:@"hb-alive"];
         if ([UIApplication sharedApplication].applicationState == UIApplicationStateActive) {
-            [self registerToSpringBoardWithRetry];
+            [self rebuildFloatingWindow];
         }
-        /* 后台不注册（后台窗口拿不到 contextID），保持已托管状态，回前台恢复 */
+        /* 后台不重建（后台窗口拿不到 contextID，v1.1.9 死循环教训），保持已托管状态 */
     }];
     [self reportToEngine:@"ball-shown"];
 }
@@ -278,7 +278,11 @@
 /* 重建悬浮窗口（仅前台）：resume 后窗口对象还在但 CA context 已被系统回收，
    前台重建拿全新 contextID 即可恢复。⚠️ 只在 App Active 状态调用（不后台循环）。 */
 - (void)rebuildFloatingWindow {
-    if (!self.floatingWindow) return;
+    /* v1.5.5: floatingWindow 可能被系统释放为 nil（后台回收），也要重建 */
+    if (!self.floatingWindow) {
+        [self showFloatingBall];
+        return;
+    }
     if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
         [self reportToEngine:@"rebuild-skipped-not-active"];
         return;

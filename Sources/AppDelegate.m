@@ -90,13 +90,13 @@ static void crash_handler(NSException *ex) {
                      [[ex callStackSymbols] componentsJoinedByString:@" | "]]);
 }
 
-/* ★ v1.5.4: App 回前台必须重新注册 SBS（懒人方案球在 App 内）。
-   现象：第一次 SBS 注册成功（球能上桌面）→ 切后台 SpringBoard 回收托管
-   → 再进 App 没人重新注册 → 球退化成 App 内普通窗口。
-   v1.1.x 的 FloatingWindowManager.reRegisterIfNeeded 就是干这个的，
-   v1.5.x 改独立 HUD 时删掉了，v1.5.4 恢复。 */
+/* ★ v1.5.5: App 回前台必须【重建悬浮窗口】拿全新 contextID（懒人方案球在 App 内）。
+   现象（v1.5.4 实测）：切后台 SpringBoard 把托管 context 回收 → 回前台 reRegisterIfNeeded
+   用的是 cachedCid 缓存的【旧 cid】→ 已失效 → SBS 注册无效 → 球只剩 App 内。
+   v1.1.x 的 rebuildFloatingWindow 就是干这个的：前台重建窗口 → 拿全新 contextID →
+   重新注册。重建只在前台（后台重建死循环 v1.1.9 教训）。 */
 - (void)applicationDidBecomeActive:(UIApplication *)application {
-    [[FloatingWindowManager shared] reRegisterIfNeeded];
+    [[FloatingWindowManager shared] rebuildFloatingWindow];
 }
 
 #pragma mark root spawn

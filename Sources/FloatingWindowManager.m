@@ -41,6 +41,7 @@
 @property (nonatomic, strong) FloatingBall *ball;
 @property (nonatomic, strong) NSTimer *touchTimer;
 @property (nonatomic, strong) NSTimer *hbTimer;      /* 心跳：定期重注册 + 上报 App 存活（诊断） */
+@property (nonatomic, assign) unsigned int cachedCid;  /* 同一窗口 contextID 不变，拿到一次缓存复用 */
 @end
 
 @implementation FloatingWindowManager
@@ -157,17 +158,19 @@
 - (unsigned int)windowContextID {
     if (!self.floatingWindow) return 0;
     /* iOS 13+ UIWindow 有 _contextId 私有 ivar */
+    if (self.cachedCid != 0) return self.cachedCid;   /* 缓存复用：窗口没重建 contextID 不变 */
     id cid = [self.floatingWindow valueForKey:@"_contextId"];
     if (cid && [cid respondsToSelector:@selector(unsignedIntValue)]) {
         unsigned int v = [cid unsignedIntValue];
-        if (v != 0) return v;
+        if (v != 0) {
+            self.cachedCid = v;
+            return v;
+        }
     }
-    /* fallback：通过 layer 拿 context id */
-    id layerCid = [self.floatingWindow.layer valueForKey:@"contextId"];
-    if (layerCid && [layerCid respondsToSelector:@selector(unsignedIntValue)]) {
-        unsigned int v = [layerCid unsignedIntValue];
-        if (v != 0) return v;
-    }
+    /* ⚠️ 不要 fallback 到 layer.contextId！那是 CA layer 的内部 ID（大数/内存地址），
+       SBSAccessibilityWindowHostingController 需要的是 WindowServer 给 UIWindow 分配的
+       contextID（_contextId，小数字）。用 layer 值注册"成功"但 SpringBoard 不认 →
+       球不显示（v1.2.5 日志铁证：reg-ok 的 cid 一会 779798 一会 3 亿大数）。 */
     return 0;
 }
 
@@ -253,6 +256,7 @@
         return;
     }
     [self reportToEngine:@"rebuild"];
+    self.cachedCid = 0;   /* 新窗口新 contextID，清缓存 */
     [self.touchTimer invalidate]; self.touchTimer = nil;
     [self.hbTimer invalidate]; self.hbTimer = nil;
     [self unregisterFromSpringBoard];

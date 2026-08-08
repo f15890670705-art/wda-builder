@@ -49,7 +49,7 @@ build:
 	$(CC) $(CFLAGS) $(ENGINE_SOURCE) -o $(APP_DIR)/touch_engine
 	# 编译独立悬浮球进程 AilinHUD（懒人模式：由引擎 spawn，不依赖主 App）
 	@mkdir -p $(HUD_APP_DIR)
-	$(CC) $(CFLAGS) $(HUD_SOURCES) -o $(HUD_APP_DIR)/$(HUD_NAME)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(HUD_SOURCES) -o $(HUD_APP_DIR)/$(HUD_NAME)
 	@cp Sources/HUD/Info.plist $(HUD_APP_DIR)/Info.plist
 	@cp Sources/HUD/Entitlements.plist $(HUD_APP_DIR)/Entitlements.plist
 	@printf 'APPL????' > $(HUD_APP_DIR)/PkgInfo

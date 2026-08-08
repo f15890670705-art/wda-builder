@@ -340,6 +340,17 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
                                                  name:@"AilinTouchSceneReady"
                                                object:nil];
 
+    /* ★ v1.7.2 照懒人时序创建悬浮球：didFinish → 延迟 1 秒 → setupHUDWindow。
+       懒人 RootService 0x10004db84 (didFinish) 反汇编：dispatch_after(1s) →
+       initializeWithHUD → setupHUDWindow（不绑 scene 的高 level 窗口）。
+       窗口必须在 App 完全启动、scene 稳定后才创建 —— 不绑 scene 的窗口此时
+       才能被 WindowServer 接受并分配 contextID（v1.6.6 在 scene 刚连接时
+       创建 → cid=0 球消失）。 */
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [[FloatingWindowManager shared] showFloatingBall];
+    });
+
     /* 1. 拉起引擎（若上次手动停止过，尊重用户选择：不自动拉起） */
     if ([[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED]) {
         NSLog(@"[AilinTouch] stopped marker present, engine stays down");

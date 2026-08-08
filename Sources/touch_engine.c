@@ -36,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.4.2"
+#define ENGINE_VERSION "1.5.0"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -576,92 +576,35 @@ static int copy_self(const char *dst) {
 }
 
 /* ---------- 独立悬浮球进程 AilinHUD（懒人模式核心） ----------
-   悬浮球由独立的 AilinHUD 进程画（root 拉起，SBS 注册全局显示），
-   不依赖主 App —— 卸载主 App 后 HUD 依然常驻（引擎 launchd 管着）。
-   HUD.app 随主 App 分发（主 App Resources/AilinHUD.app），
-   引擎启动时把它复制到 /tmp/ailintouch_hud/ 再拉起。
-   ⚠️ 不能放 /var/mobile/ailintouch/hud/：App spawn 的引擎继承 App sandbox，
-   /var/mobile/ 不可见（v1.0.9 日志/pid 同款问题，ENOENT）。/tmp 内外都能写。 */
+   悬浮球由独立的 AilinHUD 进程画（root 拉起，SBS 注册全局显示）。
+   ★★ 照 AutoGo floatball 架构：HUD 二进制直接放在主 App bundle 根目录，
+   **共享主 App 的 Info.plist**（bundle id = 已安装的 com.ailintouch.iphone）
+   → UIKit 以"已安装 App"身份请求 scene → FrontBoard 认识 → 分配 scene。
+   spawn 路径就是主 App bundle 里的 AilinHUD（不做独立 .app、不复制 ——
+   独立 bundle FrontBoard 不认，scene 永不分配，v1.3.7-1.4.2 一路的根因）。 */
 
-#define HUD_DST_DIR  "/tmp/ailintouch_hud"
-#define HUD_DST_BIN  HUD_DST_DIR "/AilinHUD.app/AilinHUD"
-
-/* 递归复制目录（简化版：只复制 HUD.app 的二进制 + Info.plist + PkgInfo） */
-static int copy_hud_bundle(const char *src_dir) {
-    if (mkdir(HUD_DST_DIR, 0755) != 0 && errno != EEXIST) {
-        LOG("hud mkdir failed: %s", strerror(errno));
-        return -1;
-    }
-    char dst_app[1024];
-    snprintf(dst_app, sizeof(dst_app), "%s/AilinHUD.app", HUD_DST_DIR);
-    mkdir(dst_app, 0755);
-
-    /* 复制二进制 */
-    char src_bin[1024], dst_bin[1024];
-    snprintf(src_bin, sizeof(src_bin), "%s/AilinHUD.app/AilinHUD", src_dir);
-    snprintf(dst_bin, sizeof(dst_bin), "%s/AilinHUD", dst_app);
-    FILE *in = fopen(src_bin, "rb");
-    if (!in) { LOG("hud src missing: %s", src_bin); return -1; }
-    FILE *out = fopen(dst_bin, "wb");
-    if (!out) { fclose(in); LOG("hud dst open failed: %s", dst_bin); return -1; }
-    char buf[8192]; size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) fwrite(buf, 1, n, out);
-    fclose(in); fclose(out);
-    chmod(dst_bin, 0755);
-
-    /* 复制 Info.plist + PkgInfo + Entitlements.plist */
-    const char *files[] = {"Info.plist", "PkgInfo", "Entitlements.plist"};
-    for (size_t i = 0; i < sizeof(files)/sizeof(files[0]); i++) {
-        char s[1024], d[1024];
-        snprintf(s, sizeof(s), "%s/AilinHUD.app/%s", src_dir, files[i]);
-        snprintf(d, sizeof(d), "%s/%s", dst_app, files[i]);
-        FILE *si = fopen(s, "rb");
-        if (!si) continue;
-        FILE *di = fopen(d, "wb");
-        if (di) {
-            while ((n = fread(buf, 1, sizeof(buf), si)) > 0) fwrite(buf, 1, n, di);
-            fclose(di);
-        }
-        fclose(si);
-    }
-    LOG("HUD bundle installed -> %s", dst_app);
-    return 0;
-}
-
-/* 拉起 AilinHUD：先尝试从 App bundle 复制（手动实例），再 spawn。
-   找不到 bundle 副本时直接 spawn 数据区已有副本（launchd 实例场景）。 */
 extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *, int, uid_t);
 extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *, uid_t);
 extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 
 static void ensure_hud(void) {
-    char src[1024] = {0};
-    uint32_t sz = sizeof(src);
-    _NSGetExecutablePath(src, &sz);
-    /* 引擎在 App bundle 内时：同级目录就是 App bundle 根（含 AilinHUD.app）。
-       ⚠️ 只传 bundle 根，不要拼 AilinHUD.app —— copy_hud_bundle 内部会拼
-       "/AilinHUD.app/xxx"，传了会变双重目录（AilinHUD.app/AilinHUD.app） */
-    char *slash = strrchr(src, '/');
-    char bundle_src[1024] = {0};
-    if (slash) {
-        snprintf(bundle_src, sizeof(bundle_src), "%.*s", (int)(slash - src), src);
-    }
-    /* 复制（若 bundle 存在） */
-    struct stat st;
-    if (stat(bundle_src, &st) == 0) {
-        copy_hud_bundle(bundle_src);
-    } else {
-        LOG("HUD bundle not next to engine (%s), using installed copy", bundle_src);
-    }
+    /* 引擎路径（App spawn 时在 App bundle 内）→ 主 App bundle 根目录 */
+    char self[1024] = {0};
+    uint32_t sz = sizeof(self);
+    _NSGetExecutablePath(self, &sz);
+    char *slash = strrchr(self, '/');
+    if (!slash) { LOG("hud: bad self path %s", self); return; }
+    char hud_bin[1024];
+    snprintf(hud_bin, sizeof(hud_bin), "%.*s/AilinHUD", (int)(slash - self), self);
 
-    /* spawn AilinHUD（root） */
-    if (access(HUD_DST_BIN, X_OK) != 0) {
-        LOG("HUD binary missing: %s", HUD_DST_BIN);
+    /* spawn AilinHUD（root，共享主 App Info.plist = 已安装身份） */
+    if (access(hud_bin, X_OK) != 0) {
+        LOG("AilinHUD binary missing: %s", hud_bin);
         return;
     }
     /* 先杀旧 HUD（防多开）—— iOS 上 system() 不可用，用 posix_spawn pkill */
     pid_t pk;
-    char *pka[] = {"/usr/bin/pkill", "-f", "AilinHUD.app/AilinHUD", NULL};
+    char *pka[] = {"/usr/bin/pkill", "-f", "AilinHUD", NULL};
     if (posix_spawn(&pk, "/usr/bin/pkill", NULL, NULL, pka, environ) == 0) {
         int pst = 0;
         waitpid(pk, &pst, 0);
@@ -669,7 +612,7 @@ static void ensure_hud(void) {
     usleep(200 * 1000);
 
     pid_t pid;
-    char *argv[] = {(char*)HUD_DST_BIN, NULL};
+    char *argv[] = {(char*)hud_bin, NULL};
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
     posix_spawnattr_set_persona_np(&attr, 99, 0);
@@ -684,11 +627,11 @@ static void ensure_hud(void) {
                                      O_WRONLY | O_CREAT | O_TRUNC, 0644);
     posix_spawn_file_actions_addopen(&fa, 2, "/tmp/ailintouch_hud.err",
                                      O_WRONLY | O_CREAT | O_APPEND, 0644);
-    int rc = posix_spawn(&pid, HUD_DST_BIN, &fa, &attr, argv, environ);
+    int rc = posix_spawn(&pid, hud_bin, &fa, &attr, argv, environ);
     posix_spawn_file_actions_destroy(&fa);
     posix_spawnattr_destroy(&attr);
     if (rc == 0) {
-        LOG("AilinHUD spawned pid=%d", pid);
+        LOG("AilinHUD spawned pid=%d (%s)", pid, hud_bin);
     } else {
         LOG("AilinHUD spawn failed: %s", strerror(rc));
     }

@@ -53,6 +53,19 @@ static AppDelegate *g_delegate;
 
 @implementation AppDelegate
 
+/* ★ 场景配置工厂（AutoGo floatball 同架构）：返回主 App 自己的 SceneDelegate。
+   Info.plist 的 UIApplicationSceneManifest 触发 scene 生命周期，
+   HUD 进程会用自己 AppDelegate 覆盖成 HUDSceneDelegate（共享 bundle 各用各的） */
+- (UISceneConfiguration *)application:(UIApplication *)application
+    configurationForConnectingSceneSession:(UISceneSession *)connectingSceneSession
+                                   options:(UISceneConnectionOptions *)options {
+
+    UISceneConfiguration *cfg = [[UISceneConfiguration alloc]
+        initWithName:@"Default Configuration" sessionRole:connectingSceneSession.role];
+    cfg.delegateClass = NSClassFromString(@"AilinTouchSceneDelegate");
+    return cfg;
+}
+
 /* 崩溃日志：App 异常退出时把原因写到 /tmp/ailintouch.crash，
    引擎 /log 可读到（root 能读 /tmp），方便远程定位"悬浮球消失=App 被杀" */
 static void write_crash_log(NSString *why) {
@@ -248,23 +261,6 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     g_delegate = self;
 
-    self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    self.window.backgroundColor = [UIColor whiteColor];
-
-    /* 两个 Tab 页 */
-    self.controlVC  = [ControlPanelViewController new];
-    self.serviceVC  = [ServiceManagerViewController new];
-
-    self.tabBar = [[ATTabBarController alloc]
-        initWithViewControllers:@[self.controlVC, self.serviceVC]
-                        titles:@[@"控制面板", @"服务管理"]
-                       symbols:@[@"house.fill", @"gearshape.fill"]];
-
-    self.nav = [[UINavigationController alloc] initWithRootViewController:self.tabBar];
-    self.nav.navigationBar.hidden = YES;     /* 自绘标题 */
-    self.window.rootViewController = self.nav;
-    [self.window makeKeyAndVisible];
-
     /* 崩溃日志：注册 handler，App 被杀原因写到 /tmp 供引擎读取 */
     NSSetUncaughtExceptionHandler(&crash_handler);
 
@@ -276,7 +272,35 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     /* 后台保活（懒人同款）：audio session + 循环静音 → App 退后台不挂起 */
     [self startBackgroundAudioKeepAlive];
 
-    /* 按钮回调 */
+    /* ★ iOS 13+ scene 生命周期（AutoGo floatball 同架构）：窗口由
+       AilinTouchSceneDelegate 在 scene:willConnect 创建，这里监听它的通知接住 UI */
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(sceneReady:)
+                                                 name:@"AilinTouchSceneReady"
+                                               object:nil];
+
+    /* 1. 拉起引擎（若上次手动停止过，尊重用户选择：不自动拉起） */
+    if ([[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED]) {
+        NSLog(@"[AilinTouch] stopped marker present, engine stays down");
+    } else {
+        self.enginePid = [self spawnEngineAsRoot];
+    }
+
+    /* 2. 每秒刷新状态 */
+    [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
+        [self refreshStatus];
+    }];
+    [self refreshStatus];
+
+    return YES;
+}
+
+/* AilinTouchSceneDelegate 建好窗口后回调：接住 VC 引用 + 绑定按钮回调 */
+- (void)sceneReady:(NSNotification *)note {
+    self.nav = note.userInfo[@"nav"];
+    self.controlVC = note.userInfo[@"controlVC"];
+    self.serviceVC = note.userInfo[@"serviceVC"];
+
     __weak typeof(self) ws = self;
     self.serviceVC.onTapStart = ^{
         BOOL wasRunning = [ws engineAlive];
@@ -313,21 +337,7 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         vc.endpointURL = @"http://127.0.0.1:8080/dir?path=/var/mobile/ailintouch";
         [ws.nav pushViewController:vc animated:YES];
     };
-
-    /* 1. 拉起引擎（若上次手动停止过，尊重用户选择：不自动拉起） */
-    if ([[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED]) {
-        NSLog(@"[AilinTouch] stopped marker present, engine stays down");
-    } else {
-        self.enginePid = [self spawnEngineAsRoot];
-    }
-
-    /* 2. 每秒刷新状态 */
-    [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
-        [self refreshStatus];
-    }];
-    [self refreshStatus];
-
-    return YES;
+    NSLog(@"[AilinTouch] scene ready, UI wired");
 }
 
 #pragma mark 状态刷新

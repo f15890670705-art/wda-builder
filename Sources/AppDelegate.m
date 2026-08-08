@@ -23,6 +23,10 @@
 #import <ifaddrs.h>
 #import <spawn.h>
 #import <pthread.h>
+#import <signal.h>
+#import <fcntl.h>
+#import <unistd.h>
+#import <time.h>
 #import <dlfcn.h>
 #import <signal.h>
 #import <net/if.h>
@@ -88,6 +92,23 @@ static void crash_handler(NSException *ex) {
                      ex.name, ex.reason, ex.userInfo]);
     write_crash_log([NSString stringWithFormat:@"STACK %@",
                      [[ex callStackSymbols] componentsJoinedByString:@" | "]]);
+}
+
+/* ★ v1.6.4: 信号级崩溃捕获（SIGABRT/SIGSEGV/SIGBUS）。
+   v1.6.3 的 KVC 写私有 ivar 触发 UIKit 内部断言 abort = SIGABRT，
+   NSSetUncaughtExceptionHandler 只捕 OC 异常，信号崩溃连 crash 文件都没写
+   （用户只看到日志"剩一条引擎 start"）。信号 handler 里只做异步安全的事
+   （open/write 是 async-signal-safe），写完后恢复默认 handler 让系统出崩溃报告。 */
+static void signal_crash_handler(int sig) {
+    int fd = open("/tmp/ailintouch.crash", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        char buf[128];
+        int n = snprintf(buf, sizeof(buf), "[%ld] SIGNAL %d\n", (long)time(NULL), sig);
+        write(fd, buf, n);
+        close(fd);
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
 }
 
 /* ★ v1.5.7 照懒人反编译（RootService 0x10004dc5c）方案修复。
@@ -284,6 +305,10 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 
     /* 崩溃日志：注册 handler，App 被杀原因写到 /tmp 供引擎读取 */
     NSSetUncaughtExceptionHandler(&crash_handler);
+    /* ★ v1.6.4: 信号级崩溃捕获（SIGABRT/SIGSEGV/SIGBUS 也写崩溃日志） */
+    signal(SIGABRT, signal_crash_handler);
+    signal(SIGSEGV, signal_crash_handler);
+    signal(SIGBUS, signal_crash_handler);
 
     /* App 打开上报（无条件）：日志里必须有这条，否则说明 App 没起来/没跑新版本 */
     BOOL stopped = [[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED];

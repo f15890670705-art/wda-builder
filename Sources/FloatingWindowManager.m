@@ -33,7 +33,19 @@
 /* 穿透窗口：SBS 托管需要全屏窗口（context 稳定不消失），但全屏窗口默认会把
    整个屏幕的触摸都拦下来（hitTest 无子视图命中时返回 self，不是 nil！）。
    重写 hitTest：只有命中悬浮球才响应，命中窗口自身/透明背景 → 返回 nil → 穿透
-   给下层主窗口（TabBar 等照常可点）。 */
+   给下层主窗口（TabBar 等照常可点）。
+
+   ★ v1.6.4 照懒人 MyCustomWindow 反汇编铁证（字符串池 0x8126f/0x8454f + 40+ selref）：
+   懒人的自定义窗口类 MyCustomWindow override 了一批 UIKit 私有 getter 返回 YES，
+   iOS 15+ 的 UIWindow 只有这些 getter 返回 YES 时，WindowServer 才把窗口当作
+   【托管窗口】处理（分配有效 contextID + 全局显示 + 不被回收）：
+     - _isWindowServerHostingManaged   ← 关键！WindowServer 托管标志
+     - _canShowWhileLocked             ← 锁屏可见
+     - _ignoresOcclusionReasons        ← 不被遮挡回收
+     - isInternalWindow                ← 系统内部窗口
+   ⚠️ v1.6.3 用 KVC setValue:forKey: 写这些 key —— 部分 key 的 setter 内部带
+   断言，设置后 UIKit 在后续 runloop SIGABRT（App 启动即崩，日志只剩引擎 start）。
+   正确姿势 = getter override（只读，不触发 setter 断言），懒人就是这么做的。 */
 @interface FloatingBallWindow : UIWindow
 @end
 
@@ -45,6 +57,12 @@
     }
     return hit;       /* 悬浮球（ball 及其子视图）→ 正常响应 */
 }
+
+/* ★ v1.6.4: 懒人 MyCustomWindow 同款私有 getter override（WindowServer 托管标志） */
+- (BOOL)_isWindowServerHostingManaged { return YES; }
+- (BOOL)_canShowWhileLocked { return YES; }
+- (BOOL)_ignoresOcclusionReasons { return YES; }
+- (BOOL)isInternalWindow { return YES; }
 @end
 
 @interface FloatingWindowManager ()
@@ -113,25 +131,10 @@
     self.floatingWindow.windowLevel = 20000002;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
 
-    /* ★ v1.6.3 照懒人反汇编铁证：SBS 托管窗口必须设置
-       _isWindowServerHostingManaged = YES —— 这是 iOS15+ 让 WindowServer
-       把窗口当作"托管窗口"分配【正确 contextID】的私有 flag！
-       懒人 MyCustomWindow 几十处引用该 flag（0x8126f 字符串 + 40+ selref）。
-       不设置 → _contextId 返回垃圾大数（设备日志 reg-ok-420595175 稳定 4 亿级，
-       不是 WindowServer contextID）→ SBS 注册无效 → 球不显示。
-       同时设置 _canShowWhileLocked（锁屏可见）。 */
-    @try {
-        [self.floatingWindow setValue:@YES forKey:@"_isWindowServerHostingManaged"];
-        [self reportToEngine:@"ws-hosted-yes"];
-    } @catch (NSException *e) {
-        [self reportToEngine:@"ws-hosted-fail"];
-    }
-    @try {
-        [self.floatingWindow setValue:@YES forKey:@"_canShowWhileLocked"];
-    } @catch (NSException *e) { }
-    @try {
-        [self.floatingWindow setValue:@YES forKey:@"_ignoresOcclusionReasons"];
-    } @catch (NSException *e) { }
+    /* ★ v1.6.3 已移除：KVC setValue 写 _isWindowServerHostingManaged 等私有 key
+       会让 UIKit 在后续 runloop SIGABRT（App 启动即崩，日志只剩引擎 start）。
+       v1.6.4 改为 FloatingBallWindow 子类 override 这些私有 getter（懒人 MyCustomWindow
+       同款姿势，见类定义处）——getter 只读不触发 setter 断言，安全且同样生效。 */
 
     /* 轻量 root VC 承载悬浮球 */
     UIViewController *vc = [UIViewController new];

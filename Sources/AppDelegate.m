@@ -12,6 +12,7 @@
 #import "FileViewerViewController.h"
 #import "LogViewerViewController.h"
 #import "DirListViewController.h"
+#import "FloatingWindowManager.h"
 #import <sys/socket.h>
 #import <sys/un.h>
 #import <sys/stat.h>
@@ -237,9 +238,9 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     [self.window makeKeyAndVisible];
 
     /* 全局悬浮球（懒人同款 SBS 注册；点击暂时 toast "123"） */
-    __weak typeof(self) ws = self;
+    __weak typeof(self) ws0 = self;
     FloatingWindowManager.shared.onTap = ^{
-        [ws showToast:@"123"];
+        [ws0 showToast:@"123"];
     };
     dispatch_async(dispatch_get_main_queue(), ^{
         [FloatingWindowManager.shared showFloatingBall];

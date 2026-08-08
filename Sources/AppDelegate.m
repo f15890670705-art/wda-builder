@@ -13,6 +13,7 @@
 #import "LogViewerViewController.h"
 #import "DirListViewController.h"
 #import "FloatingWindowManager.h"
+#import <AVFoundation/AVFoundation.h>
 #import <sys/socket.h>
 #import <sys/un.h>
 #import <sys/stat.h>
@@ -48,6 +49,7 @@ static AppDelegate *g_delegate;
 @property (nonatomic, strong) ServiceManagerViewController *serviceVC;
 @property (nonatomic, assign) pid_t enginePid;
 @property (nonatomic, strong) NSString *cachedIP;
+@property (nonatomic, strong) AVAudioPlayer *keepAlivePlayer;
 @end
 
 @implementation AppDelegate
@@ -246,6 +248,10 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [FloatingWindowManager.shared showFloatingBall];
     });
 
+    /* 后台保活（懒人同款）：audio session + 循环静音 → App 退后台不挂起，
+       悬浮球（SpringBoard 托管窗口）的触摸事件才能路由回 App 进程 */
+    [self startBackgroundAudioKeepAlive];
+
     /* 按钮回调 */
     __weak typeof(self) ws = self;
     self.serviceVC.onTapStart = ^{
@@ -370,6 +376,32 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
             }];
         });
     }];
+}
+
+#pragma mark 后台保活（懒人同款）
+
+- (void)startBackgroundAudioKeepAlive {
+    NSError *err = nil;
+    /* 声明 playback 会话：App 退后台后系统仍允许播放音频，进程不挂起 */
+    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback
+                                           withOptions:AVAudioSessionCategoryOptionMixWithOthers
+                                                 error:&err];
+    [[AVAudioSession sharedInstance] setActive:YES error:nil];
+
+    NSString *path = [[NSBundle mainBundle] pathForResource:@"silence" ofType:@"wav"];
+    if (!path) {
+        NSLog(@"[KeepAlive] silence.wav not in bundle");
+        return;
+    }
+    self.keepAlivePlayer = [[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:path] error:&err];
+    if (!self.keepAlivePlayer) {
+        NSLog(@"[KeepAlive] AVAudioPlayer init error: %@", err);
+        return;
+    }
+    self.keepAlivePlayer.numberOfLoops = -1;   /* 无限循环 */
+    self.keepAlivePlayer.volume = 0.0;         /* 静音（音量 0 依然占音频通道） */
+    [self.keepAlivePlayer play];
+    NSLog(@"[KeepAlive] background audio started (silence loop)");
 }
 
 @end

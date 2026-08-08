@@ -46,7 +46,9 @@ build:
 	@cp Resources/Info.plist $(APP_DIR)/Info.plist
 	# 复制 AppIcon PNG（Info.plist 用 CFBundleIconFiles 引用 AppIcon60x60 / AppIcon76x76 名字）
 	@cp -R Resources/AppIcon/*.png $(APP_DIR)/
-	@echo "== build done (App + touch_engine + icons) =="
+	# 后台保活静音音频（懒人同款：App 退后台循环播放静音，进程不挂起，悬浮球触摸可送达）
+	@cp Resources/silence.wav $(APP_DIR)/
+	@echo "== build done (App + touch_engine + icons + silence.wav) =="
 
 sign:
 	@echo "== signing App =="

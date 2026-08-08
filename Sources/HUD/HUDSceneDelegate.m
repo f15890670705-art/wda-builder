@@ -142,12 +142,13 @@ static void hud_mark(NSString *msg) {
     return 0;
 }
 
+static int g_register_attempts = 0;   /* SBS 注册重试计数 */
+
 - (void)registerToSpringBoard {
     unsigned int cid = [self windowContextID];
     if (cid == 0) {
         /* 首帧可能拿不到，0.3s 后重试（最多 10 次） */
-        static int attempts = 0;
-        if (attempts++ < 10) {
+        if (g_register_attempts++ < 10) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 [self registerToSpringBoard];
@@ -155,7 +156,7 @@ static void hud_mark(NSString *msg) {
         }
         return;
     }
-    attempts = 0;
+    g_register_attempts = 0;
     Class cls = NSClassFromString(@"SBSAccessibilityWindowHostingController");
     if (!cls) {
         hud_mark(@"sbs-class-missing");

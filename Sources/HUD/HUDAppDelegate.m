@@ -50,6 +50,10 @@
     /* 关键：makeKeyAndVisible 激活窗口（HUD 是独立进程，无主窗口冲突） */
     [self.window makeKeyAndVisible];
 
+    /* 存活标记：HUD 启动成功写入 /tmp（引擎 root 可读，远程诊断用） */
+    [@"1.3.6\n" writeToFile:@"/tmp/ailintouch_hud.alive"
+                atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
     /* SBS 注册 → 全局悬浮 */
     [self registerToSpringBoard];
 
@@ -76,11 +80,18 @@
         return;
     }
     Class cls = NSClassFromString(@"SBSAccessibilityWindowHostingController");
-    if (!cls) return;
+    if (!cls) {
+        [@"sbs-class-missing\n" writeToFile:@"/tmp/ailintouch_hud.alive"
+                               atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        return;
+    }
     id ctrl = [[cls alloc] init];
     if ([ctrl respondsToSelector:@selector(registerWindowWithContextID:atLevel:)]) {
         [ctrl registerWindowWithContextID:cid atLevel:self.window.windowLevel];
         NSLog(@"[AilinHUD] registered cid=%u", cid);
+        [[NSString stringWithFormat:@"registered-cid=%u\n", cid]
+            writeToFile:@"/tmp/ailintouch_hud.alive"
+              atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
 }
 

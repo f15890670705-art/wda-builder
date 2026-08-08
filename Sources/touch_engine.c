@@ -36,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.3.5"
+#define ENGINE_VERSION "1.3.6"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -394,6 +394,21 @@ static void handle_client(int cfd) {
             snprintf(reply, sizeof(reply),
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                 tl, tail);
+        } else if (strncmp(path, "/hud", 4) == 0) {
+            /* 远程诊断：HUD 存活标记 + spawn 日志（HUD 是独立进程，这里读它的存活文件） */
+            char hbuf[2048] = {0};
+            size_t hn = 0;
+            FILE *hf = fopen("/tmp/ailintouch_hud.alive", "r");
+            if (hf) {
+                hn = fread(hbuf, 1, sizeof(hbuf) - 1, hf);
+                fclose(hf);
+            }
+            char haux[512] = {0};
+            snprintf(haux, sizeof(haux), "hud_alive_file=%s\n", hn > 0 ? hbuf : "(missing)");
+            size_t hl = strlen(haux);
+            snprintf(reply, sizeof(reply),
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                hl, haux);
         } else if (strncmp(path, "/dir", 4) == 0) {
             /* /dir?path=/var/mobile/ailintouch  列出目录（root 引擎读，App 免 root） */
             char dirp[512] = {0};

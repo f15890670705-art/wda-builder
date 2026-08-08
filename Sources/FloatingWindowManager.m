@@ -18,6 +18,23 @@
 - (void)unregisterWindowWithContextID:(unsigned int)contextID;
 @end
 
+/* 穿透窗口：SBS 托管需要全屏窗口（context 稳定不消失），但全屏窗口默认会把
+   整个屏幕的触摸都拦下来（hitTest 无子视图命中时返回 self，不是 nil！）。
+   重写 hitTest：只有命中悬浮球才响应，命中窗口自身/透明背景 → 返回 nil → 穿透
+   给下层主窗口（TabBar 等照常可点）。 */
+@interface FloatingBallWindow : UIWindow
+@end
+
+@implementation FloatingBallWindow
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hit = [super hitTest:point withEvent:event];
+    if (hit == self || hit == self.rootViewController.view) {
+        return nil;   /* 窗口自身 / rootVC 全屏透明背景 → 穿透 */
+    }
+    return hit;       /* 悬浮球（ball 及其子视图）→ 正常响应 */
+}
+@end
+
 @interface FloatingWindowManager ()
 @property (nonatomic, strong) id hostingController;
 @property (nonatomic, assign) BOOL registered;
@@ -59,12 +76,11 @@
     CGFloat y = keyWindow.bounds.size.height / 2 - size;
     CGRect screen = keyWindow.bounds;
 
-    self.floatingWindow = [[UIWindow alloc] initWithFrame:screen];
+    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:screen];
     self.floatingWindow.windowLevel = UIWindowLevelStatusBar + 100;   /* 高过普通 App 窗口 */
     self.floatingWindow.backgroundColor = [UIColor clearColor];
-    /* 注意：不能设 userInteractionEnabled=NO（会连子视图 ball 一起禁掉）。
-       透明区域没有子视图 → hitTest 返回 nil → 触摸天然穿透到下层窗口，
-       只有命中 ball 的区域才被球拦截。 */
+    /* 触摸穿透由 FloatingBallWindow hitTest 处理：透明区返回 nil → 不拦下层窗口，
+       只有 ball 区域响应。不能设 userInteractionEnabled=NO（会连 ball 一起禁掉）。 */
     self.floatingWindow.hidden = NO;
 
     /* 轻量 root VC 承载悬浮球（view 全屏透明，球是子视图） */

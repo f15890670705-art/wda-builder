@@ -121,17 +121,21 @@
     CGRect full = windowScene ? windowScene.coordinateSpace.bounds : [UIScreen mainScreen].bounds;
     CGFloat y = full.size.height / 2 - size;
 
-    /* ★ v1.7.1 照懒人 setupHUDWindow 反汇编铁证：窗口【不绑 windowScene】！
-       懒人窗口 = [[MyCustomWindow alloc] initWithFrame:UIScreen.mainScreen.bounds]
-       + makeKeyAndVisible —— daemon 身份下窗口由 WindowServer 直接托管，
-       【不经 scene 生命周期】→ scene 挂起不影响 → 球全局持久。
-       v1.6.6 不绑 scene 失败（cid=0 球消失）是因为当时 SpringBoard 还没
-       重新加载 daemon 配置（未重启手机）。用户铁证"第一次安装时全局"=
-       安装瞬间 daemon 生效。v1.7.1 恢复不绑 scene + 装机后重启手机
-       （SpringBoard 重读 SBAppIsDaemon/LaunchAtBoot）→ daemon 生效 →
-       窗口系统级 → 球全局。 */
-    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
-    /* ⚠️ 不设置 windowScene —— 照懒人，daemon 窗口由 WindowServer 直接托管 */
+    /* ★ v1.7.3 综合方案（用户铁证"二进制 scene" + 懒人符号铁证）：
+       懒人 RootService 含 FBSceneManager/FBSMutableSceneDefinition/
+       createSceneWithDefinition/UIRootWindowScenePresentationBinder 符号！
+       正确架构 = 窗口【绑 UIKit scene】（拿 contextID，v1.6.4 验证
+       _contextId=420595175 有效）+ UIRootWindowScenePresentationBinder
+       addScene:windowScene._fbScene（把二进制 FBScene 绑到系统 root window
+       层 → 窗口挂在 SpringBoard 系统 scene 上，不随 App scene 挂起）。
+       v1.6.2 已验证 binder 传 _fbScene 不异常；v1.6.9 已删切后台隐藏；
+       v1.7.0 心跳注册自动用新 cid。全部组合。 */
+    self.floatingWindow = [[FloatingBallWindow alloc] initWithWindowScene:windowScene];
+    if (!self.floatingWindow) {
+        /* 兜底：scene 为 nil 时退回旧姿势 */
+        self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
+        self.floatingWindow.windowScene = windowScene;
+    }
     self.floatingWindow.windowLevel = 20000002;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
 
@@ -151,11 +155,15 @@
        scene 模式下没有这个顾虑（主窗口仍 visible 显示）。 */
     [self.floatingWindow makeKeyAndVisible];
 
-    /* ★ v1.6.5 删除 binder 绑定：懒人 RootService 完整反汇编证明——
-       懒人没有 UIRootWindowScenePresentationBinder！窗口就是
-       initWithFrame + makeKeyAndVisible + SBS 注册（daemon 窗口由
-       WindowServer 直接托管）。binder 是 AutoGo agoverlayd（纯 C 进程
-       手动建 FBScene）才需要的，我们 App 内窗口不需要。 */
+    /* ★ v1.7.3 恢复 binder 绑定（用户"二进制 scene"铁证）：
+       懒人 RootService 含 UIRootWindowScenePresentationBinder +
+       FBSceneManager + createSceneWithDefinition 符号 —— 窗口的二进制
+       FBScene（windowScene._fbScene）addScene 到 binder → 窗口绑定到
+       系统 root window scene → 全局显示且不随 App scene 挂起。
+       v1.6.5 误判"懒人没有 binder"删除是错的（binder 字符串一直在懒人里）。 */
+    if (windowScene) {
+        [self bindToRootWindowScene:windowScene];
+    }
 
     /* 立即注册（若 contextID 尚未分配会失败，走 retry 补齐） */
     [self registerToSpringBoardWithRetry];

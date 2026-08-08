@@ -123,10 +123,17 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
-    posix_spawnattr_set_persona_np(&attr, 99, 0);
+    /* ★ v1.5.9 照 AutoGo 反汇编 _AGSpawnWithRootPreference (0x10001cd38) 铁证提权：
+       ① posix_spawnattr_setflags(0x400) = POSIX_SPAWN_SETPERSONA —— v1.5.8 及之前
+          setflags(POSIX_SPAWN_SETPGROUP|0x100) 缺这个 flag → persona 设置全部无效
+          → 引擎 uid=99 非 root → launchd 装不上 → App 没真正 daemon 化！
+       ② set_persona_np(attr, 99, 1) —— 照 AutoGo 原样
+       ③ set_persona_uid_np(attr, 0) → root；set_persona_gid_np(attr, 0) → root group
+       顺序也照 AutoGo：init → setflags → persona_np → uid → gid */
+    posix_spawnattr_setflags(&attr, 0x400);
+    posix_spawnattr_set_persona_np(&attr, 99, 1);
     posix_spawnattr_set_persona_uid_np(&attr, 0);
     posix_spawnattr_set_persona_gid_np(&attr, 0);
-    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | 0x100);
 
     pid_t pid = 0;
     char *argv[] = {(char *)[enginePath UTF8String], NULL};

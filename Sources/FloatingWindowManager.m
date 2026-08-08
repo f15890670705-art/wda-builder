@@ -199,30 +199,33 @@
        跟懒人完全一致。 */
 }
 
-/* 取 UIWindow 的 contextID（懒人 safeGetWindowContextID 同思路） */
+/* 取 UIWindow 的 contextID（懒人 safeGetWindowContextID 同思路）。
+   ★ v1.5.9 照懒人反汇编 (0x10004d330) 铁证重写：
+   懒人每次【重新取】（不缓存！）且依次试多个 key：先 _contextId，fallback 试
+   contextId，拿非 0 值即用（unsignedIntValue 转换）。
+   v1.5.8 及之前只试 _contextId 且把值缓存（cachedCid）→ 若某次拿到 CA 内部大数
+   就被永久缓存，心跳一直报同一个错值。修复：不缓存、多 key 依次尝试。
+   注意：iOS 15+ 的 WindowServer contextID 可能就是大数（用户实测第一次注册成功
+   能全局显示），所以不设"小数字"上限误杀，只要求非 0。 */
 - (unsigned int)windowContextID {
     if (!self.floatingWindow) return 0;
-    /* iOS 13+ UIWindow 有 _contextId 私有 ivar */
-    if (self.cachedCid != 0) return self.cachedCid;   /* 缓存复用：窗口没重建 contextID 不变 */
-    /* ⚠️ v1.5.3: valueForKey 找不到 key 会抛 NSUnknownKeyException 直接闪退！
-       用 @try 包住（iOS 版本差异/窗口未 attach 时 _contextId 可能不可见） */
-    @try {
-        id cid = [self.floatingWindow valueForKey:@"_contextId"];
-        if (cid && [cid respondsToSelector:@selector(unsignedIntValue)]) {
-            unsigned int v = [cid unsignedIntValue];
-            if (v != 0) {
-                self.cachedCid = v;
-                return v;
+    /* 依次尝试多个 key（懒人同款）：_contextId → contextId，每次重新取不缓存 */
+    NSArray *keys = @[@"_contextId", @"contextId"];
+    for (NSString *key in keys) {
+        @try {
+            id cid = [self.floatingWindow valueForKey:key];
+            if (cid && [cid respondsToSelector:@selector(unsignedIntValue)]) {
+                unsigned int v = [cid unsignedIntValue];
+                if (v != 0) {
+                    self.cachedCid = v;   /* 记录最近值（诊断用，不用于跳过重取） */
+                    return v;
+                }
             }
+        } @catch (NSException *e) {
+            /* key 不存在：继续试下一个 */
+            [self reportToEngine:[NSString stringWithFormat:@"cid-kvc-%@-ex", key]];
         }
-    } @catch (NSException *e) {
-        NSLog(@"[Floating] _contextId KVC failed: %@", e);
-        [self reportToEngine:@"cid-kvc-exception"];
     }
-    /* ⚠️ 不要 fallback 到 layer.contextId！那是 CA layer 的内部 ID（大数/内存地址），
-       SBSAccessibilityWindowHostingController 需要的是 WindowServer 给 UIWindow 分配的
-       contextID（_contextId，小数字）。用 layer 值注册"成功"但 SpringBoard 不认 →
-       球不显示（v1.2.5 日志铁证：reg-ok 的 cid 一会 779798 一会 3 亿大数）。 */
     return 0;
 }
 

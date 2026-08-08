@@ -244,4 +244,23 @@
     self.registered = NO;
 }
 
+/* 重建悬浮窗口（仅前台）：resume 后窗口对象还在但 CA context 已被系统回收，
+   前台重建拿全新 contextID 即可恢复。⚠️ 只在 App Active 状态调用（不后台循环）。 */
+- (void)rebuildFloatingWindow {
+    if (!self.floatingWindow) return;
+    if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
+        [self reportToEngine:@"rebuild-skipped-not-active"];
+        return;
+    }
+    [self reportToEngine:@"rebuild"];
+    [self.touchTimer invalidate]; self.touchTimer = nil;
+    [self.hbTimer invalidate]; self.hbTimer = nil;
+    [self unregisterFromSpringBoard];
+    self.floatingWindow.hidden = YES;
+    self.floatingWindow = nil;
+    self.ball = nil;
+    self.registered = NO;
+    [self showFloatingBall];
+}
+
 @end

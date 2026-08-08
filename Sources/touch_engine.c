@@ -35,7 +35,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.2.3"
+#define ENGINE_VERSION "1.2.4"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -326,10 +326,13 @@ static void handle_client(int cfd) {
             snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"ok\":true}");
         } else if (strncmp(path, "/status", 7) == 0) {
             uint64_t s = g_sender_id ? g_sender_id : g_fallback_sender;
-            snprintf(reply, sizeof(reply),
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 200\r\nConnection: close\r\n\r\n"
+            char body[128];
+            int bl = snprintf(body, sizeof(body),
                 "{\"engine\":\"root ready\",\"senderid\":\"%llx\",\"fallback\":\"%llx\",\"seq\":%d}",
                 (unsigned long long)g_sender_id, (unsigned long long)s, g_seq);
+            snprintf(reply, sizeof(reply),
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+                bl, body);
         } else if (strncmp(path, "/diag", 5) == 0) {
             /* 诊断：返回 LOG 状态、文件 stat、errno、stopped marker */
             char dbuf[1024];

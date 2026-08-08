@@ -176,16 +176,15 @@
        SBS register 是幂等的（重复注册同一 contextID 无副作用），心跳持续
        register 保持托管即可；rebuild 只在 applicationDidBecomeActive 回前台时
        做一次（拿全新 contextID，v1.5.5 保留）。 */
-    /* ★ v1.6.7 照懒人铁证：心跳【不再 re-register】！
-       懒人 registerHUDWindow 只注册【一次】（daemon 永活，注册完就不动）。
-       我们 v1.5.4-v1.6.6 心跳每 5 秒 registerToSpringBoardWithRetry ——
-       每次 register 都会重新向 SpringBoard 提交托管，重复打断已有托管
-       → 球闪烁/全局显示几百ms就消失（SBS 托管反复重建）。
-       正确做法：注册一次成功后就保持，心跳只上报存活（诊断），不碰窗口。
-       SBS 托管由 SpringBoard 自己维持（懒人证明：注册一次 + daemon 永活）。 */
+    /* ★ v1.7.0 心跳恢复注册：每 5 秒幂等 re-register。
+       v1.6.7 学懒人"只注册一次"去掉了注册 —— 但懒人 daemon 的 cid 永不变，
+       我们前台 App 进后台 WindowServer 会回收/更换 contextID（用户铁证：
+       第一次装球全局 → App 进后台 → 永远内部）。windowContextID 每次重新取
+       新值，心跳注册会自动用新 cid（cid 没变则重复注册同一 cid 幂等无害）。 */
     self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *t) {
         [self reportToEngine:@"hb-alive"];
-        /* 不再 re-register —— 懒人注册一次，重复注册反而打断托管 */
+        if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
+        [self registerToSpringBoardWithRetry];
     }];
     [self reportToEngine:@"ball-shown"];
 }

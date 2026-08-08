@@ -120,6 +120,13 @@ static void signal_crash_handler(int sig) {
    回前台只 setHidden:NO 即可，跟懒人完全一致。 */
 - (void)applicationDidBecomeActive:(UIApplication *)application {
     [[FloatingWindowManager shared] setWindowVisible:YES];
+    /* ★ v1.7.0 关键修复：回前台必须【重新注册 SBS】！
+       用户铁证："第一次安装球全局 → App 任何方式进后台 → 永远变内部球"。
+       机制：App 进后台时 WindowServer 回收窗口 contextID（cid 变化），
+       SBS 注册的旧 cid 失效 → 托管丢失；回前台若不重新注册，球永远内部。
+       懒人（daemon）cid 永不变所以注册一次够，我们前台 App cid 会变
+       必须回前台重新注册（windowContextID 每次重新取新值）。 */
+    [[FloatingWindowManager shared] registerToSpringBoardWithRetry];
 }
 
 /* ★ v1.6.9 修复：切后台【绝不隐藏窗口】！

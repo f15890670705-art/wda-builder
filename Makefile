@@ -30,7 +30,8 @@ APP_SOURCES  = Sources/main.m Sources/AppDelegate.m \
                Sources/ATTabBarController.m \
                Sources/ControlPanelViewController.m \
                Sources/ServiceManagerViewController.m \
-               Sources/FileViewerViewController.m
+               Sources/FileViewerViewController.m \
+               Sources/LogViewerViewController.m
 ENGINE_SOURCE = Sources/touch_engine.c
 
 all: build sign ipa

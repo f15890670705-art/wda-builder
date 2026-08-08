@@ -10,6 +10,7 @@
 #import "ControlPanelViewController.h"
 #import "ServiceManagerViewController.h"
 #import "FileViewerViewController.h"
+#import "LogViewerViewController.h"
 #import <sys/socket.h>
 #import <sys/un.h>
 #import <sys/stat.h>
@@ -259,8 +260,9 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [ws showToast:@"IP 已刷新"];
     };
     self.serviceVC.onTapLogDir = ^{
-        UIViewController *vc = [[FileViewerViewController alloc]
-            initWithTitle:@"日志目录" path:ENGINE_LOG_PATH showTail:NO];
+        /* 走 HTTP /log：root 引擎读日志后返回，App 不用 root */
+        LogViewerViewController *vc = [LogViewerViewController new];
+        vc.endpointURL = @"http://127.0.0.1:8080/log";
         [ws.nav pushViewController:vc animated:YES];
     };
     self.serviceVC.onTapWorkDir = ^{

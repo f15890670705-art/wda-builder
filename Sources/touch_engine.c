@@ -36,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.3.2"
+#define ENGINE_VERSION "1.3.3"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -554,10 +554,11 @@ static int copy_self(const char *dst) {
    悬浮球由独立的 AilinHUD 进程画（root 拉起，SBS 注册全局显示），
    不依赖主 App —— 卸载主 App 后 HUD 依然常驻（引擎 launchd 管着）。
    HUD.app 随主 App 分发（主 App Resources/AilinHUD.app），
-   引擎首次启动时把它复制到数据区 /var/mobile/ailintouch/hud/，
-   之后由引擎/launchd 拉起 AilinHUD 二进制。 */
+   引擎启动时把它复制到 /tmp/ailintouch_hud/ 再拉起。
+   ⚠️ 不能放 /var/mobile/ailintouch/hud/：App spawn 的引擎继承 App sandbox，
+   /var/mobile/ 不可见（v1.0.9 日志/pid 同款问题，ENOENT）。/tmp 内外都能写。 */
 
-#define HUD_DST_DIR  DATA_ROOT "/hud"
+#define HUD_DST_DIR  "/tmp/ailintouch_hud"
 #define HUD_DST_BIN  HUD_DST_DIR "/AilinHUD.app/AilinHUD"
 
 /* 递归复制目录（简化版：只复制 HUD.app 的二进制 + Info.plist + PkgInfo） */

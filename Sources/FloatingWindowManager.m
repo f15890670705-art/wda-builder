@@ -92,7 +92,6 @@
     }
     self.floatingWindow.windowLevel = UIWindowLevelStatusBar + 100;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
-    self.floatingWindow.hidden = NO;
 
     /* 轻量 root VC 承载悬浮球 */
     UIViewController *vc = [UIViewController new];
@@ -104,6 +103,12 @@
     [vc.view addSubview:ball];
     self.ball = ball;
 
+    /* ★ v1.5.6: makeKeyAndVisible（懒人同款）—— iOS13+ scene 模式多窗口共存，
+       窗口必须 makeKeyAndVisible 才会被 WindowServer 分配 contextID + SBS 托管。
+       v1.1.x 因 legacy 单窗口模式抢 key window 回退成 hidden=NO，
+       scene 模式下没有这个顾虑（主窗口仍 visible 显示）。 */
+    [self.floatingWindow makeKeyAndVisible];
+
     /* 立即注册（若 contextID 尚未分配会失败，走 retry 补齐） */
     [self registerToSpringBoardWithRetry];
 
@@ -113,15 +118,17 @@
         [self pollTouchFile];
     }];
 
-    /* ★ v1.5.5: 心跳每 5 秒【前台重建窗口重新注册】（懒人同款保持）。
-       之前心跳只 register 用缓存 cid——后台回收后旧 cid 已失效，注册无效。
-       改为前台重建（拿全新 contextID），彻底解决"切后台再回来球没了"。 */
+    /* ★ v1.5.6: 心跳每 5 秒【幂等重注册】，绝不 rebuild！
+       v1.5.5 心跳每 5 秒 rebuild → 窗口每 5 秒销毁重建 → 球闪烁 + 刚注册成功
+       就被打断（用户实测"几秒闪一下"）。
+       SBS register 是幂等的（重复注册同一 contextID 无副作用），心跳持续
+       register 保持托管即可；rebuild 只在 applicationDidBecomeActive 回前台时
+       做一次（拿全新 contextID，v1.5.5 保留）。 */
     self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *t) {
         [self reportToEngine:@"hb-alive"];
-        if ([UIApplication sharedApplication].applicationState == UIApplicationStateActive) {
-            [self rebuildFloatingWindow];
-        }
-        /* 后台不重建（后台窗口拿不到 contextID，v1.1.9 死循环教训），保持已托管状态 */
+        if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
+        /* 幂等重注册（cid 缓存复用，无副作用；不重建窗口） */
+        [self registerToSpringBoardWithRetry];
     }];
     [self reportToEngine:@"ball-shown"];
 }
@@ -280,7 +287,7 @@
 - (void)rebuildFloatingWindow {
     /* v1.5.5: floatingWindow 可能被系统释放为 nil（后台回收），也要重建 */
     if (!self.floatingWindow) {
-        [self showFloatingBall];
+        [self showFloatingBallInScene:[[[UIApplication sharedApplication] connectedScenes] anyObject]];
         return;
     }
     if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
@@ -288,6 +295,7 @@
         return;
     }
     [self reportToEngine:@"rebuild"];
+    UIWindowScene *scene = (UIWindowScene *)[[[UIApplication sharedApplication] connectedScenes] anyObject];
     self.cachedCid = 0;   /* 新窗口新 contextID，清缓存 */
     [self.touchTimer invalidate]; self.touchTimer = nil;
     [self.hbTimer invalidate]; self.hbTimer = nil;
@@ -296,7 +304,7 @@
     self.floatingWindow = nil;
     self.ball = nil;
     self.registered = NO;
-    [self showFloatingBall];
+    [self showFloatingBallInScene:scene];
 }
 
 @end

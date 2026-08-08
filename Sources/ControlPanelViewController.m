@@ -95,7 +95,10 @@
                           @"即可触发触摸与滑动。\n\n"
                           @"示例命令:\n"
                           @"  GET /tap?x=200&y=400         单击\n"
-                          @"  GET /swipe?x1=100&y1=500&x2=300&y2=500&ms=300   滑动\n";
+                          @"  GET /swipe?x1=100&y1=500&x2=300&y2=500&ms=300   滑动\n"
+                          @"  GET /key?name=home           按 Home 键\n"
+                          @"  GET /key?name=lock           锁屏\n"
+                          @"  GET /key?page=0xC&usage=0x40 自定义按键 (十六进制)\n";
     [card addSubview:self.descLabel];
 
     self.ipLabel = [UILabel new];

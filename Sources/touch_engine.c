@@ -32,7 +32,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/var/mobile/ailintouch.stopped"
-#define ENGINE_VERSION "1.0.1"
+#define ENGINE_VERSION "1.0.3"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -53,6 +53,7 @@ typedef void* (*fn_CreateDigitizer)(void*, uint64_t, uint32_t, uint32_t, uint32_
     double, double, double, double, double, uint32_t, uint32_t, uint32_t);
 typedef void* (*fn_CreateFinger)(void*, uint64_t, uint32_t, uint32_t, uint32_t,
     double, double, double, double, double, uint32_t, uint32_t, uint32_t);
+typedef void* (*fn_CreateKeyboard)(void*, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t);
 typedef uint64_t (*fn_GetSenderID)(void*);
 typedef void  (*fn_SetSender)(void*, uint64_t);
 typedef void  (*fn_SetInteger)(void*, void*, int);
@@ -64,6 +65,7 @@ typedef void  (*fn_Schedule)(void*, CFRunLoopRef, CFStringRef);
 
 static fn_CreateDigitizer p_CreateDigitizer;
 static fn_CreateFinger    p_CreateFinger;
+static fn_CreateKeyboard  p_CreateKeyboard;
 static fn_GetSenderID     p_GetSenderID;
 static fn_SetSender       p_SetSender;
 static fn_SetInteger      p_SetInteger;
@@ -99,6 +101,7 @@ static int hid_init(void) {
 
     p_CreateDigitizer = (fn_CreateDigitizer)dlsym(io_handle, "IOHIDEventCreateDigitizerEvent");
     p_CreateFinger    = (fn_CreateFinger)dlsym(io_handle, "IOHIDEventCreateDigitizerFingerEvent");
+    p_CreateKeyboard  = (fn_CreateKeyboard)dlsym(io_handle, "IOHIDEventCreateKeyboardEvent");
     p_GetSenderID     = (fn_GetSenderID)dlsym(io_handle, "IOHIDEventGetSenderID");
     p_SetSender       = (fn_SetSender)dlsym(io_handle, "IOHIDEventSetSenderID");
     p_SetInteger      = (fn_SetInteger)dlsym(io_handle, "IOHIDEventSetIntegerValue");
@@ -187,6 +190,38 @@ static void do_swipe(float x1, float y1, float x2, float y2, int ms) {
     send_digitizer(x2, y2, 3, 1);
 }
 
+/* ---------- 按键注入（home / 锁屏 / 音量，懒人精灵同款 IOHIDEventCreateKeyboardEvent） ---------- */
+static void send_key(uint32_t page, uint32_t usage, int down) {
+    if (!hid_client || !p_CreateKeyboard) { LOG("key: client/keyboard sym missing"); return; }
+    uint64_t sender = g_sender_id ? g_sender_id : g_fallback_sender;
+    if (!sender) return;
+    uint64_t ts = mach_absolute_time();
+    void *k = p_CreateKeyboard(NULL, ts, page, usage, down, 0);
+    if (!k) { LOG("key: create failed page=0x%x usage=0x%x", page, usage); return; }
+    if (p_SetSender) p_SetSender(k, sender);
+    p_Dispatch(hid_client, k);
+    CFRelease(k);
+    LOG("key page=0x%x usage=0x%x %s", page, usage, down ? "down" : "up");
+}
+
+/* 单击 = down + up，间隔 40ms */
+static void do_key_press(uint32_t page, uint32_t usage) {
+    send_key(page, usage, 1);
+    usleep(40 * 1000);
+    send_key(page, usage, 0);
+}
+
+/* 常用按键快捷映射（usage 需实机验证，多给候选） */
+static int do_named_key(const char *name) {
+    if (strcmp(name, "home") == 0)       { do_key_press(0x0C, 0x40);   return 1; }  /* Consumer Menu */
+    if (strcmp(name, "home2") == 0)      { do_key_press(0x0C, 0x0223); return 1; }  /* Consumer AC Home */
+    if (strcmp(name, "lock") == 0)       { do_key_press(0x08, 0xE9);   return 1; }  /* Power / 锁屏 */
+    if (strcmp(name, "volup") == 0)      { do_key_press(0x0C, 0xE9);   return 1; }  /* Volume Increment */
+    if (strcmp(name, "voldown") == 0)    { do_key_press(0x0C, 0xEA);   return 1; }  /* Volume Decrement */
+    if (strcmp(name, "mute") == 0)       { do_key_press(0x0C, 0xE2);   return 1; }
+    return 0;
+}
+
 static void handle_client(int cfd) {
     char buf[512] = {0};
     ssize_t n = read(cfd, buf, sizeof(buf)-1);
@@ -212,6 +247,22 @@ static void handle_client(int cfd) {
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 200\r\nConnection: close\r\n\r\n"
                 "{\"engine\":\"root ready\",\"senderid\":\"%llx\",\"fallback\":\"%llx\",\"seq\":%d}",
                 (unsigned long long)g_sender_id, (unsigned long long)s, g_seq);
+        } else if (strncmp(path, "/key", 4) == 0) {
+            /* /key?name=home 或 /key?page=0xC&usage=0x40 */
+            char name[32] = {0};
+            unsigned int page = 0, usage = 0;
+            if (sscanf(path, "/key?name=%31[a-zA-Z0-9]", name) == 1) {
+                if (do_named_key(name)) {
+                    snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"ok\":true}");
+                } else {
+                    snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{\"ok\":false}");
+                }
+            } else if (sscanf(path, "/key?page=%x&usage=%x", &page, &usage) == 2) {
+                do_key_press((uint32_t)page, (uint32_t)usage);
+                snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"ok\":true}");
+            } else {
+                snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{\"ok\":false}");
+            }
         } else {
             snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{\"ok\":false}");
         }
@@ -228,6 +279,16 @@ static void handle_client(int cfd) {
     else if (strcmp(cmd, "DOWN") == 0) { send_digitizer(a,b,1,1); snprintf(reply, sizeof(reply), "OK\n"); }
     else if (strcmp(cmd, "MOVE") == 0) { send_digitizer(a,b,2,1); snprintf(reply, sizeof(reply), "OK\n"); }
     else if (strcmp(cmd, "UP") == 0)   { send_digitizer(a,b,3,1); snprintf(reply, sizeof(reply), "OK\n"); }
+    else if (strcmp(cmd, "HOME") == 0) { do_named_key("home"); snprintf(reply, sizeof(reply), "OK\n"); }
+    else if (strcmp(cmd, "LOCK") == 0) { do_named_key("lock"); snprintf(reply, sizeof(reply), "OK\n"); }
+    else if (strcmp(cmd, "VOLUP") == 0)   { do_named_key("volup"); snprintf(reply, sizeof(reply), "OK\n"); }
+    else if (strcmp(cmd, "VOLDOWN") == 0) { do_named_key("voldown"); snprintf(reply, sizeof(reply), "OK\n"); }
+    else if (strcmp(cmd, "KEY") == 0 && n > 4) {
+        char kname[32] = {0};
+        sscanf(buf + 4, "%31s", kname);
+        if (do_named_key(kname)) snprintf(reply, sizeof(reply), "OK\n");
+        else snprintf(reply, sizeof(reply), "ERR unknown-key\n");
+    }
     else if (strcmp(cmd, "STATUS") == 0) {
         uint64_t s = g_sender_id ? g_sender_id : g_fallback_sender;
         snprintf(reply, sizeof(reply), "engine=%s ver=%s senderid=%llx fallback=%llx seq=%d\n",

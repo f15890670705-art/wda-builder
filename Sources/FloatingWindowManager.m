@@ -103,11 +103,11 @@
     }];
 
     /* 心跳：每 3 秒上报 App 存活到引擎日志（远程诊断）；
-       后台时强制重注册（SpringBoard 可能移除托管窗口，registered 标志不可靠） */
+       后台时幂等重注册（SBS register 幂等，重复注册无副作用，不会抖掉窗口） */
     self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer *t) {
         [self reportToEngine:@"hb-alive"];
         if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
-            [self reRegisterForce];
+            [self registerToSpringBoardWithRetry];
         }
     }];
     [self reportToEngine:@"ball-shown"];
@@ -143,18 +143,13 @@
     self.ball = nil;
 }
 
-/* App 回前台/活跃时调用：确保悬浮球仍注册在 SpringBoard（防止被移除） */
+/* App 回前台/活跃时调用：确保悬浮球仍注册在 SpringBoard。
+   ⚠️ 只 register，不 unregister —— SBS register 是幂等的（重复注册同一
+   contextID 无副作用）；先 unregister 再 register 有竞态：unregister 后窗口
+   已从 SpringBoard 移除，若 register 因 cid 暂为 0 失败，球就永久消失。 */
 - (void)reRegisterIfNeeded {
     if (!self.floatingWindow) return;
-    [self reRegisterForce];
-}
-
-/* 强制重注册：先 unregister 再 register（SpringBoard 可能静默移除托管窗口，
-   registered 标志此时仍是 YES，必须无条件重注册） */
-- (void)reRegisterForce {
-    if (!self.floatingWindow) return;
-    [self unregisterFromSpringBoard];
-    [self registerToSpringBoard];
+    [self registerToSpringBoardWithRetry];
     [self reportToEngine:@"re-register"];
 }
 
@@ -192,11 +187,12 @@
 }
 
 - (void)registerToSpringBoard {
-    /* 去掉 if (self.registered) return —— SpringBoard 可能已移除托管但标志没重置，
-       心跳/回前台必须能无条件重注册 */
     unsigned int cid = [self windowContextID];
     if (cid == 0) {
-        [self reportToEngine:@"cid-zero"];
+        /* cid 暂未分配：静默 return 会让球在 unregister 后永久消失，
+           必须走 registerToSpringBoardWithRetry 的重试路径 */
+        [self reportToEngine:@"cid-zero-retry"];
+        [self registerToSpringBoardWithRetry];
         return;
     }
 
@@ -207,7 +203,11 @@
         return;
     }
 
-    self.hostingController = [[cls alloc] init];
+    /* 复用同一个 controller 实例（懒人持有一个 controller 反复 register；
+       每次 alloc 新实例注册同一 cid 的行为不可预期） */
+    if (!self.hostingController) {
+        self.hostingController = [[cls alloc] init];
+    }
     if ([self.hostingController respondsToSelector:@selector(registerWindowWithContextID:atLevel:)]) {
         [self.hostingController registerWindowWithContextID:cid
                                                    atLevel:self.floatingWindow.windowLevel];

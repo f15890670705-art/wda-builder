@@ -35,7 +35,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.1.6"
+#define ENGINE_VERSION "1.2.2"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -331,17 +331,19 @@ static void handle_client(int cfd) {
                 "{\"engine\":\"root ready\",\"senderid\":\"%llx\",\"fallback\":\"%llx\",\"seq\":%d}",
                 (unsigned long long)g_sender_id, (unsigned long long)s, g_seq);
         } else if (strncmp(path, "/diag", 5) == 0) {
-            /* 诊断：返回 LOG 状态、文件 stat、errno */
+            /* 诊断：返回 LOG 状态、文件 stat、errno、stopped marker */
             char dbuf[1024];
             struct stat st;
             int exists = (stat(LOG_PATH, &st) == 0);
+            int stopped = (access(STOPPED_MARKER, F_OK) == 0);
             snprintf(dbuf, sizeof(dbuf),
-                "{\"engine_ver\":\"%s\",\"log_path\":\"%s\",\"log_exists\":%s,\"log_size\":%lld,\"log_open_ok\":%s,\"errno_at_open\":%d}",
+                "{\"engine_ver\":\"%s\",\"log_path\":\"%s\",\"log_exists\":%s,\"log_size\":%lld,\"log_open_ok\":%s,\"errno_at_open\":%d,\"stopped_marker\":%s}",
                 ENGINE_VERSION, LOG_PATH,
                 exists ? "true" : "false",
                 exists ? (long long)st.st_size : -1,
                 logfp ? "true" : "false",
-                logfp ? 0 : errno);
+                logfp ? 0 : errno,
+                stopped ? "true" : "false");
             size_t dl = strlen(dbuf);
             snprintf(reply, sizeof(reply),
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",

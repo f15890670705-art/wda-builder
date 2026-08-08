@@ -270,6 +270,13 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     /* 崩溃日志：注册 handler，App 被杀原因写到 /tmp 供引擎读取 */
     NSSetUncaughtExceptionHandler(&crash_handler);
 
+    /* App 打开上报（无条件，不依赖悬浮球是否显示）：
+       日志里必须有这条，否则说明 App 进程没起来/没跑新版本 */
+    BOOL stopped = [[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED];
+    [FloatingWindowManager.shared reportToEngine:
+        [NSString stringWithFormat:@"app-open stopped=%d ver=%@",
+         stopped, [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"]]];
+
     /* 全局悬浮球（懒人同款 SBS 注册；点击暂时 toast "123"） */
     __weak typeof(self) ws0 = self;
     FloatingWindowManager.shared.onTap = ^{

@@ -14,6 +14,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)showFloatingBall;
 - (void)hideFloatingBall;
 - (void)reRegisterIfNeeded;
+- (void)reportToEngine:(NSString *)msg;   /* App 状态上报到引擎日志（远程诊断） */
 @end
 
 NS_ASSUME_NONNULL_END

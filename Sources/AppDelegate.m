@@ -122,10 +122,18 @@ static void signal_crash_handler(int sig) {
     [[FloatingWindowManager shared] setWindowVisible:YES];
 }
 
-/* ★ v1.5.7 新增：切后台懒人是 no-op（SBS 自己管理）。但我们保险起见也
-   调 setHidden:YES，避免后台时球被看到。 */
+/* ★ v1.6.9 修复：切后台【绝不隐藏窗口】！
+   v1.5.7 加 setWindowVisible:NO 是【自杀行为】——
+   SBS registerWindowWithContextID 注册后，SpringBoard 托管的是该 contextID
+   对应的窗口画面；窗口 setHidden:YES = 画面消失 = 球从全局消失！
+   用户现象铁证："切后台悬浮球全局显示一下就消失"（v1.5.4 前）、
+   "有真实点击才全局显示几百ms"（点击→becomeActive→恢复显示→马上又
+   inactive→隐藏→消失）——全是 setWindowVisible:NO 干的！
+   懒人 didEnterBackground 虽也 setHidden:YES，但懒人是 daemon（永远后台
+   运行、无前台态），该分支实际从不执行。我们是前台 App，切后台必然触发，
+   绝不能隐藏窗口 —— SBS 托管要靠窗口画面持续存在，切后台只留心跳即可。 */
 - (void)applicationDidEnterBackground:(UIApplication *)application {
-    [[FloatingWindowManager shared] setWindowVisible:NO];
+    /* no-op：不隐藏窗口，SBS 托管的球继续全局显示 */
 }
 
 #pragma mark root spawn

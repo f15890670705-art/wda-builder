@@ -36,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.3.4"
+#define ENGINE_VERSION "1.3.5"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -613,11 +613,13 @@ static void ensure_hud(void) {
     char src[1024] = {0};
     uint32_t sz = sizeof(src);
     _NSGetExecutablePath(src, &sz);
-    /* 引擎在 App bundle 内时：../AilinHUD.app 同级 */
+    /* 引擎在 App bundle 内时：同级目录就是 App bundle 根（含 AilinHUD.app）。
+       ⚠️ 只传 bundle 根，不要拼 AilinHUD.app —— copy_hud_bundle 内部会拼
+       "/AilinHUD.app/xxx"，传了会变双重目录（AilinHUD.app/AilinHUD.app） */
     char *slash = strrchr(src, '/');
     char bundle_src[1024] = {0};
     if (slash) {
-        snprintf(bundle_src, sizeof(bundle_src), "%.*s/AilinHUD.app", (int)(slash - src), src);
+        snprintf(bundle_src, sizeof(bundle_src), "%.*s", (int)(slash - src), src);
     }
     /* 复制（若 bundle 存在） */
     struct stat st;

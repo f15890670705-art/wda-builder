@@ -66,32 +66,31 @@
 - (void)showFloatingBall {
     if (self.floatingWindow) return;
 
-    /* TrollSpeed（TrollStore 生态悬浮 HUD 成熟实现，iOS 14 验证）标准姿势：
-       ① 全屏窗口（SBS 托管窗口 context 需要全屏）
-       ② windowLevel = 10000010（1000万级，盖过一切）
-       ③ ★makeKeyAndVisible★（只设 hidden=NO 的窗口没被 WindowServer 激活，
-          球注册了也不渲染 —— 这就是"点一下屏幕球才显示"的真相：触摸激活了窗口） */
-    CGFloat size = 56;
-    CGFloat x = 20;
-    CGFloat y = [UIScreen mainScreen].bounds.size.height / 2 - size;
+    /* 回退 v1.2.7：56×56 小窗口 + hidden=NO。
+       v1.2.8 的 makeKeyAndVisible 抢走 key window 造成回归（点击了球也没了），
+       回退到"至少点击能活"的形态。 */
+    UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
+    if (!keyWindow) return;
 
-    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    self.floatingWindow.windowLevel = 10000010.0;   /* TrollSpeed 同款极高层级 */
+    CGFloat size = 56;                          /* 球尺寸 */
+    CGFloat x = 20;                             /* 初始靠左 */
+    CGFloat y = keyWindow.bounds.size.height / 2 - size;
+    CGRect ballFrame = CGRectMake(x, y, size, size);
+
+    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:ballFrame];
+    self.floatingWindow.windowLevel = UIWindowLevelStatusBar + 100;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
     self.floatingWindow.hidden = NO;
 
-    /* 轻量 root VC 承载悬浮球（view 全屏透明，球是子视图） */
+    /* 轻量 root VC 承载悬浮球（view 跟随窗口 56×56，球填满） */
     UIViewController *vc = [UIViewController new];
     vc.view.backgroundColor = [UIColor clearColor];
     self.floatingWindow.rootViewController = vc;
 
-    FloatingBall *ball = [[FloatingBall alloc] initWithFrame:CGRectMake(x, y, size, size)];
+    FloatingBall *ball = [[FloatingBall alloc] initWithFrame:CGRectMake(0, 0, size, size)];
     ball.onTap = self.onTap;
     [vc.view addSubview:ball];
     self.ball = ball;
-
-    /* ★关键：makeKeyAndVisible 激活窗口（TrollSpeed 同款），否则窗口不被渲染 */
-    [self.floatingWindow makeKeyAndVisible];
 
     /* 立即注册（若 contextID 尚未分配会失败，走 retry 补齐） */
     [self registerToSpringBoardWithRetry];
@@ -124,8 +123,11 @@
     float x = 0, y = 0;
     if (sscanf(content.UTF8String, "%f %f", &x, &y) != 2) return;
 
-    /* 球的屏幕坐标：窗口全屏，ball.frame 相对 vc.view（= 屏幕坐标） */
-    CGRect ballFrame = self.ball.frame;
+    /* 球的屏幕坐标 = 窗口 origin + ball.origin（窗口 56×56 = 球的位置） */
+    CGPoint ballOrigin = CGPointMake(self.floatingWindow.frame.origin.x + self.ball.frame.origin.x,
+                                     self.floatingWindow.frame.origin.y + self.ball.frame.origin.y);
+    CGRect ballFrame = CGRectMake(ballOrigin.x, ballOrigin.y,
+                                  self.ball.bounds.size.width, self.ball.bounds.size.height);
     if (CGRectContainsPoint(ballFrame, CGPointMake(x, y))) {
         if (self.onTap) self.onTap();
     }

@@ -54,6 +54,11 @@ static AppDelegate *g_delegate;
 
 @implementation AppDelegate
 
+/* App 回前台/活跃：重新确保悬浮球注册（SpringBoard 可能移除） */
+- (void)applicationDidBecomeActive:(UIApplication *)application {
+    [FloatingWindowManager.shared reRegisterIfNeeded];
+}
+
 #pragma mark root spawn
 
 extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *, int, uid_t);

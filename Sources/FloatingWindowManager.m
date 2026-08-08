@@ -3,10 +3,11 @@
 //
 // 全局悬浮窗：懒人同款 SBSAccessibilityWindowHostingController 方案
 //   1. 创建高 windowLevel 的 UIWindow（普通 App 只能盖自己界面）
-//   2. 取 window 的 contextID
+//   2. 取 window 的 contextID（需等 WindowServer 分配，延迟+重试）
 //   3. SBSAccessibilityWindowHostingController registerWindowWithContextID:atLevel:
 //      → 把窗口注册进 SpringBoard → 悬浮在所有 App 之上
 //   4. 发 HUD 通知确认注册
+//   5. App 回前台/后台切换时重新注册，防止 SpringBoard 移除后丢失
 //
 #import "FloatingWindowManager.h"
 #import "FloatingBall.h"
@@ -19,6 +20,7 @@
 
 @interface FloatingWindowManager ()
 @property (nonatomic, strong) id hostingController;
+@property (nonatomic, assign) BOOL registered;
 @end
 
 @implementation FloatingWindowManager
@@ -55,7 +57,8 @@
     ball.onTap = self.onTap;
     [vc.view addSubview:ball];
 
-    [self registerToSpringBoard];
+    /* 立即注册（若 contextID 尚未分配会失败，走 retry 补齐） */
+    [self registerToSpringBoardWithRetry];
 }
 
 - (void)hideFloatingBall {
@@ -65,28 +68,50 @@
     self.floatingWindow = nil;
 }
 
+/* App 回前台/活跃时调用：确保悬浮球仍注册在 SpringBoard（防止被移除） */
+- (void)reRegisterIfNeeded {
+    if (!self.floatingWindow) return;
+    if (self.registered) return;
+    [self registerToSpringBoardWithRetry];
+}
+
 /* 取 UIWindow 的 contextID（懒人 safeGetWindowContextID 同思路） */
 - (unsigned int)windowContextID {
     if (!self.floatingWindow) return 0;
     /* iOS 13+ UIWindow 有 _contextId 私有 ivar */
     id cid = [self.floatingWindow valueForKey:@"_contextId"];
     if (cid && [cid respondsToSelector:@selector(unsignedIntValue)]) {
-        return [cid unsignedIntValue];
+        unsigned int v = [cid unsignedIntValue];
+        if (v != 0) return v;
     }
     /* fallback：通过 layer 拿 context id */
     id layerCid = [self.floatingWindow.layer valueForKey:@"contextId"];
     if (layerCid && [layerCid respondsToSelector:@selector(unsignedIntValue)]) {
-        return [layerCid unsignedIntValue];
+        unsigned int v = [layerCid unsignedIntValue];
+        if (v != 0) return v;
     }
     return 0;
 }
 
-- (void)registerToSpringBoard {
+/* 带重试的注册：contextID 需要等 WindowServer 分配，首帧可能为 0，
+   每 0.3s 重试一次，最多 10 次（3 秒内一定能拿到） */
+- (void)registerToSpringBoardWithRetry {
     unsigned int cid = [self windowContextID];
     if (cid == 0) {
-        NSLog(@"[Floating] cannot get window contextID");
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            if (!self.floatingWindow) return;
+            [self registerToSpringBoardWithRetry];
+        });
         return;
     }
+    [self registerToSpringBoard];
+}
+
+- (void)registerToSpringBoard {
+    if (self.registered) return;
+    unsigned int cid = [self windowContextID];
+    if (cid == 0) return;
 
     Class cls = NSClassFromString(@"SBSAccessibilityWindowHostingController");
     if (!cls) {
@@ -98,6 +123,7 @@
     if ([self.hostingController respondsToSelector:@selector(registerWindowWithContextID:atLevel:)]) {
         [self.hostingController registerWindowWithContextID:cid
                                                    atLevel:self.floatingWindow.windowLevel];
+        self.registered = YES;
         NSLog(@"[Floating] registered contextID=%u level=%.0f", cid, self.floatingWindow.windowLevel);
     }
 
@@ -113,6 +139,7 @@
         [self.hostingController unregisterWindowWithContextID:cid];
     }
     self.hostingController = nil;
+    self.registered = NO;
 }
 
 @end

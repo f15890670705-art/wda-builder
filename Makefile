@@ -24,7 +24,8 @@ CFLAGS = -arch $(ARCH) -isysroot $(SDK) -fobjc-arc -Wall \
 LDFLAGS = -arch $(ARCH) -isysroot $(SDK) \
           -framework Foundation -framework UIKit \
           -framework CoreFoundation -framework CoreGraphics \
-          -framework IOKit -framework QuartzCore
+          -framework IOKit -framework QuartzCore \
+          -framework AVFoundation -framework AudioToolbox
 
 APP_SOURCES  = Sources/main.m Sources/AppDelegate.m \
                Sources/ATTabBarController.m \

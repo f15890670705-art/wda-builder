@@ -15,9 +15,10 @@ static void hud_mark(NSString *msg) {
           atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
-/* FrontBoard 初始化（私有 API，运行时 dlopen 解析避免链接报错） */
+/* FrontBoard 初始化（私有 API，运行时 dlopen 解析避免链接报错）。
+   FBSystemShellInitialize 在 FrontBoard.framework（不是 FrontBoardServices）*/
 static void fb_init(void) {
-    void *h = dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
+    void *h = dlopen("/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard", RTLD_NOW);
     if (!h) {
         hud_mark([NSString stringWithFormat:@"fb-dlopen-fail:%s", dlerror()]);
         return;

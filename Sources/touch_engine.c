@@ -32,7 +32,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/var/mobile/ailintouch.stopped"
-#define ENGINE_VERSION "1.0.3"
+#define ENGINE_VERSION "1.0.4"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -198,6 +198,8 @@ static void send_key(uint32_t page, uint32_t usage, int down) {
     uint64_t ts = mach_absolute_time();
     void *k = p_CreateKeyboard(NULL, ts, page, usage, down, 0);
     if (!k) { LOG("key: create failed page=0x%x usage=0x%x", page, usage); return; }
+    /* ⭐ iOS 逆向社区验证：按键事件必须 SetIntegerValue(field=4, 1)，否则 backboardd 不认 */
+    if (p_SetInteger) p_SetInteger(k, (void*)(uintptr_t)4, 1);
     if (p_SetSender) p_SetSender(k, sender);
     p_Dispatch(hid_client, k);
     CFRelease(k);
@@ -211,11 +213,11 @@ static void do_key_press(uint32_t page, uint32_t usage) {
     send_key(page, usage, 0);
 }
 
-/* 常用按键快捷映射（usage 需实机验证，多给候选） */
+/* 常用按键快捷映射（WDA 标准表：0x0C=Consumer；0x40=Home/Menu、0x30=Power、0xE9/0xEA=音量） */
 static int do_named_key(const char *name) {
-    if (strcmp(name, "home") == 0)       { do_key_press(0x0C, 0x40);   return 1; }  /* Consumer Menu */
+    if (strcmp(name, "home") == 0)       { do_key_press(0x0C, 0x40);   return 1; }  /* Consumer Home/Menu */
     if (strcmp(name, "home2") == 0)      { do_key_press(0x0C, 0x0223); return 1; }  /* Consumer AC Home */
-    if (strcmp(name, "lock") == 0)       { do_key_press(0x08, 0xE9);   return 1; }  /* Power / 锁屏 */
+    if (strcmp(name, "lock") == 0)       { do_key_press(0x0C, 0x30);   return 1; }  /* Consumer Power / 锁屏 */
     if (strcmp(name, "volup") == 0)      { do_key_press(0x0C, 0xE9);   return 1; }  /* Volume Increment */
     if (strcmp(name, "voldown") == 0)    { do_key_press(0x0C, 0xEA);   return 1; }  /* Volume Decrement */
     if (strcmp(name, "mute") == 0)       { do_key_press(0x0C, 0xE2);   return 1; }
@@ -247,6 +249,27 @@ static void handle_client(int cfd) {
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 200\r\nConnection: close\r\n\r\n"
                 "{\"engine\":\"root ready\",\"senderid\":\"%llx\",\"fallback\":\"%llx\",\"seq\":%d}",
                 (unsigned long long)g_sender_id, (unsigned long long)s, g_seq);
+        } else if (strncmp(path, "/log", 4) == 0) {
+            /* 返回引擎日志尾部 80 行，方便远程排查 */
+            char lbuf[8192] = {0};
+            size_t ln = 0;
+            FILE *lf = fopen(LOG_PATH, "r");
+            if (lf) {
+                ln = fread(lbuf, 1, sizeof(lbuf) - 1, lf);
+                fclose(lf);
+            }
+            /* 取尾部 */
+            char *tail = lbuf + ln;
+            int lines = 0;
+            while (tail > lbuf && lines < 80) {
+                tail--;
+                if (*tail == '\n') lines++;
+            }
+            if (*tail == '\n') tail++;
+            size_t tl = strlen(tail);
+            snprintf(reply, sizeof(reply),
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                tl, tail);
         } else if (strncmp(path, "/key", 4) == 0) {
             /* /key?name=home 或 /key?page=0xC&usage=0x40 */
             char name[32] = {0};

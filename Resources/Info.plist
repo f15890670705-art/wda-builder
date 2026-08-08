@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.5.2</string>
+	<string>1.5.3</string>
 	<key>CFBundleVersion</key>
-	<string>1.5.2</string>
+	<string>1.5.3</string>
 	<key>CFBundleSupportedPlatforms</key>
 	<array>
 		<string>iPhoneOS</string>
@@ -101,6 +101,8 @@
 	<true/>
 	<key>SpringBoard</key>
 	<dict>
+		<key>Hide</key>
+		<true/>
 		<key>Background</key>
 		<true/>
 		<key>LaunchAtBoot</key>
@@ -109,29 +111,31 @@
 		<true/>
 	</dict>
 
-	<!-- ★ v1.5.2 铁证：懒人(RootService)/AutoGo 都有 BSServiceDomains ——
-	     裸进程/App 连接 FrontBoard 的 domain 权限来源。
-	     v1.4.1 崩溃"FBServiceFacilityServer 需 frontboard.system-service domain"
-	     就是缺这个！照懒人原样抄。 -->
+	<!-- ★ v1.5.2 铁证：懒人(RootService) 的 BSServiceDomains 结构（照原样抄）——
+	     DerivedServiceRestrictions 是数组（字符串列表），Services 的值是空 dict {}。
+	     v1.5.2 第一版抄错成嵌套 dict+true，可能导致 FrontBoard 服务注册异常。 -->
 	<key>BSServiceDomains</key>
 	<dict>
 		<key>com.apple.frontboard</key>
 		<dict>
 			<key>DerivedServiceRestrictions</key>
+			<array>
+				<string>com.apple.uis.applicationStateService</string>
+				<string>com.apple.frontboard.layout-monitor</string>
+				<string>com.ailintouch.backgroundService</string>
+				<string>com.ailintouch.networkService</string>
+				<string>com.ailintouch.startupService</string>
+			</array>
+			<key>Services</key>
 			<dict>
-				<key>Services</key>
-				<dict>
-					<key>com.apple.frontboard.system-service</key>
-					<true/>
-					<key>com.apple.frontboard.workspace-service</key>
-					<true/>
-					<key>com.apple.frontboard.layout-monitor</key>
-					<true/>
-					<key>com.apple.uis.applicationStateService</key>
-					<true/>
-					<key>com.apple.uis.applicationSupportService</key>
-					<true/>
-				</dict>
+				<key>com.apple.frontboard.system-service</key>
+				<dict/>
+				<key>com.ailintouch.network-service</key>
+				<dict/>
+				<key>com.apple.frontboard.workspace-service</key>
+				<dict/>
+				<key>com.ailintouch.background-service</key>
+				<dict/>
 			</dict>
 		</dict>
 	</dict>

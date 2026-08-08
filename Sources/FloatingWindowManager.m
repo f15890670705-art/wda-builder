@@ -170,13 +170,20 @@
     if (!self.floatingWindow) return 0;
     /* iOS 13+ UIWindow 有 _contextId 私有 ivar */
     if (self.cachedCid != 0) return self.cachedCid;   /* 缓存复用：窗口没重建 contextID 不变 */
-    id cid = [self.floatingWindow valueForKey:@"_contextId"];
-    if (cid && [cid respondsToSelector:@selector(unsignedIntValue)]) {
-        unsigned int v = [cid unsignedIntValue];
-        if (v != 0) {
-            self.cachedCid = v;
-            return v;
+    /* ⚠️ v1.5.3: valueForKey 找不到 key 会抛 NSUnknownKeyException 直接闪退！
+       用 @try 包住（iOS 版本差异/窗口未 attach 时 _contextId 可能不可见） */
+    @try {
+        id cid = [self.floatingWindow valueForKey:@"_contextId"];
+        if (cid && [cid respondsToSelector:@selector(unsignedIntValue)]) {
+            unsigned int v = [cid unsignedIntValue];
+            if (v != 0) {
+                self.cachedCid = v;
+                return v;
+            }
         }
+    } @catch (NSException *e) {
+        NSLog(@"[Floating] _contextId KVC failed: %@", e);
+        [self reportToEngine:@"cid-kvc-exception"];
     }
     /* ⚠️ 不要 fallback 到 layer.contextId！那是 CA layer 的内部 ID（大数/内存地址），
        SBSAccessibilityWindowHostingController 需要的是 WindowServer 给 UIWindow 分配的
@@ -233,19 +240,25 @@
     if (!self.hostingController) {
         self.hostingController = [[cls alloc] init];
     }
-    if ([self.hostingController respondsToSelector:@selector(registerWindowWithContextID:atLevel:)]) {
-        [self.hostingController registerWindowWithContextID:cid
-                                                   atLevel:self.floatingWindow.windowLevel];
-        self.registered = YES;
-        NSLog(@"[Floating] registered contextID=%u level=%.0f", cid, self.floatingWindow.windowLevel);
-        [self reportToEngine:[NSString stringWithFormat:@"reg-ok-%u", cid]];
-    } else {
-        [self reportToEngine:@"sbs-no-selector"];
-    }
+    /* ⚠️ v1.5.3: SBS 私有方法调用包 @try——iOS 版本差异/签名变化会直接崩 */
+    @try {
+        if ([self.hostingController respondsToSelector:@selector(registerWindowWithContextID:atLevel:)]) {
+            [self.hostingController registerWindowWithContextID:cid
+                                                       atLevel:self.floatingWindow.windowLevel];
+            self.registered = YES;
+            NSLog(@"[Floating] registered contextID=%u level=%.0f", cid, self.floatingWindow.windowLevel);
+            [self reportToEngine:[NSString stringWithFormat:@"reg-ok-%u", cid]];
+        } else {
+            [self reportToEngine:@"sbs-no-selector"];
+        }
 
-    /* HUD 注册通知（懒人同款） */
-    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
-        CFSTR("com.apple.hudservices.windowRegistered"), NULL, NULL, true);
+        /* HUD 注册通知（懒人同款） */
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+            CFSTR("com.apple.hudservices.windowRegistered"), NULL, NULL, true);
+    } @catch (NSException *e) {
+        NSLog(@"[Floating] SBS register exception: %@", e);
+        [self reportToEngine:@"sbs-reg-exception"];
+    }
 }
 
 - (void)unregisterFromSpringBoard {

@@ -90,7 +90,13 @@
     if (windowScene) {
         self.floatingWindow.windowScene = windowScene;
     }
-    self.floatingWindow.windowLevel = UIWindowLevelStatusBar + 100;
+    /* ★ v1.5.8 照懒人反汇编（RootService setupHUDWindow 0x10004d6e8）铁证：
+       懒人悬浮球窗口 level = 20000002（2千万级），不是 UIWindowLevelStatusBar+100！
+       v1.5.4-v1.5.7 用 UIWindowLevelStatusBar+100=1100 太低——SBS 托管窗口
+       level 必须远超所有 App 窗口，SpringBoard 才把它显示在所有 App 之上。
+       用户日志 reg-ok-2137088603 是 3 亿级大数 + 球不全局显示 = level 低被
+       SpringBoard 忽略。照懒人原样用 20000002。 */
+    self.floatingWindow.windowLevel = 20000002;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
 
     /* 轻量 root VC 承载悬浮球 */

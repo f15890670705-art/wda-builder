@@ -32,7 +32,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/var/mobile/ailintouch.stopped"
-#define ENGINE_VERSION "1.0.4"
+#define ENGINE_VERSION "1.0.5"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -431,7 +431,12 @@ int main(int argc, char *argv[]) {
     int is_launchd = (getppid() == 1);  /* launchd 拉起时父进程是 launchd */
 
     if (!is_launchd) {
-        /* 由 App spawn 的手动实例：安装 launchd 后退出，交给 launchd 常驻 */
+        /* 由 App spawn 的手动实例：
+           1) 先杀旧实例（含 launchd 常驻的旧版本引擎，否则 8080 一直被旧代码占着）
+           2) 覆盖安装 launchd 配置（copy_self 会把新二进制拷到 INSTALL_PATH）
+           3) 退出交给 launchd 拉起新版本 */
+        kill_old_instance();
+        usleep(200 * 1000);
         int rc = ensure_launchd();
         if (rc == 0) {
             LOG("handoff to launchd, exiting");

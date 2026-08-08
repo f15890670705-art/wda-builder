@@ -11,8 +11,10 @@
 # 无 Mac？用 .github/workflows/build-ipa.yml 在 GitHub Actions 免费云构建
 
 APP_NAME    = AilinTouch
+HUD_NAME    = AilinHUD
 BUILD_DIR   = build
 APP_DIR     = $(BUILD_DIR)/$(APP_NAME).app
+HUD_APP_DIR = $(BUILD_DIR)/$(HUD_NAME).app
 
 SDK  = $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
 ARCH = arm64
@@ -36,6 +38,7 @@ APP_SOURCES  = Sources/main.m Sources/AppDelegate.m \
                Sources/DirListViewController.m \
                Sources/FloatingBall.m \
                Sources/FloatingWindowManager.m
+HUD_SOURCES  = Sources/HUD/main.m Sources/HUD/HUDAppDelegate.m Sources/HUD/HUDBall.m
 ENGINE_SOURCE = Sources/touch_engine.c
 
 all: build sign ipa
@@ -44,22 +47,34 @@ build:
 	@mkdir -p $(APP_DIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(APP_SOURCES) -o $(APP_DIR)/$(APP_NAME)
 	$(CC) $(CFLAGS) $(ENGINE_SOURCE) -o $(APP_DIR)/touch_engine
+	# 编译独立悬浮球进程 AilinHUD（懒人模式：由引擎 spawn，不依赖主 App）
+	@mkdir -p $(HUD_APP_DIR)
+	$(CC) $(CFLAGS) $(HUD_SOURCES) -o $(HUD_APP_DIR)/$(HUD_NAME)
+	@cp Sources/HUD/Info.plist $(HUD_APP_DIR)/Info.plist
+	@cp Sources/HUD/Entitlements.plist $(HUD_APP_DIR)/Entitlements.plist
+	@printf 'APPL????' > $(HUD_APP_DIR)/PkgInfo
 	@cp Resources/Info.plist $(APP_DIR)/Info.plist
 	# 复制 AppIcon PNG（Info.plist 用 CFBundleIconFiles 引用 AppIcon60x60 / AppIcon76x76 名字）
 	@cp -R Resources/AppIcon/*.png $(APP_DIR)/
 	# 后台保活静音音频（懒人同款：App 退后台循环播放静音，进程不挂起，悬浮球触摸可送达）
 	@cp Resources/silence.wav $(APP_DIR)/
-	@echo "== build done (App + touch_engine + icons + silence.wav) =="
+	# 把 AilinHUD.app 放进主 App 的 Resources，由引擎复制到系统路径 + spawn
+	@cp -R $(HUD_APP_DIR) $(APP_DIR)/AilinHUD.app
+	@echo "== build done (App + touch_engine + AilinHUD + icons + silence.wav) =="
 
 sign:
 	@echo "== signing App =="
 	ldid -SEntitlements.plist $(APP_DIR)/$(APP_NAME)
 	@echo "== signing touch_engine =="
 	ldid -SEntitlements.plist $(APP_DIR)/touch_engine
+	@echo "== signing AilinHUD =="
+	ldid -SEntitlements.plist $(APP_DIR)/AilinHUD.app/$(HUD_NAME)
 	@chmod 755 $(APP_DIR)/touch_engine
+	@chmod 755 $(APP_DIR)/AilinHUD.app/$(HUD_NAME)
 	@echo "== verify =="
 	@ldid -e $(APP_DIR)/$(APP_NAME) | grep -q "event-dispatch" && echo "OK: App event-dispatch" || echo "WARN: App event-dispatch missing"
 	@ldid -e $(APP_DIR)/touch_engine | grep -q "event-dispatch" && echo "OK: engine event-dispatch" || echo "WARN: engine event-dispatch missing"
+	@ldid -e $(APP_DIR)/AilinHUD.app/$(HUD_NAME) | grep -q "accessibility-window-hosting" && echo "OK: HUD accessibility-window-hosting" || echo "WARN: HUD accessibility-window-hosting missing"
 
 ipa:
 	@rm -rf $(BUILD_DIR)/Payload

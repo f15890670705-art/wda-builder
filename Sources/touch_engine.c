@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <unistd.h>
+#include <errno.h>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <dirent.h>
@@ -35,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.2.4"
+#define ENGINE_VERSION "1.3.0"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -549,6 +550,104 @@ static int copy_self(const char *dst) {
     return 0;
 }
 
+/* ---------- 独立悬浮球进程 AilinHUD（懒人模式核心） ----------
+   悬浮球由独立的 AilinHUD 进程画（root 拉起，SBS 注册全局显示），
+   不依赖主 App —— 卸载主 App 后 HUD 依然常驻（引擎 launchd 管着）。
+   HUD.app 随主 App 分发（主 App Resources/AilinHUD.app），
+   引擎首次启动时把它复制到数据区 /var/mobile/ailintouch/hud/，
+   之后由引擎/launchd 拉起 AilinHUD 二进制。 */
+
+#define HUD_DST_DIR  DATA_ROOT "/hud"
+#define HUD_DST_BIN  HUD_DST_DIR "/AilinHUD.app/AilinHUD"
+
+/* 递归复制目录（简化版：只复制 HUD.app 的二进制 + Info.plist + PkgInfo） */
+static int copy_hud_bundle(const char *src_dir) {
+    if (mkdir(HUD_DST_DIR, 0755) != 0 && errno != EEXIST) {
+        LOG("hud mkdir failed: %s", strerror(errno));
+        return -1;
+    }
+    char dst_app[1024];
+    snprintf(dst_app, sizeof(dst_app), "%s/AilinHUD.app", HUD_DST_DIR);
+    mkdir(dst_app, 0755);
+
+    /* 复制二进制 */
+    char src_bin[1024], dst_bin[1024];
+    snprintf(src_bin, sizeof(src_bin), "%s/AilinHUD.app/AilinHUD", src_dir);
+    snprintf(dst_bin, sizeof(dst_bin), "%s/AilinHUD", dst_app);
+    FILE *in = fopen(src_bin, "rb");
+    if (!in) { LOG("hud src missing: %s", src_bin); return -1; }
+    FILE *out = fopen(dst_bin, "wb");
+    if (!out) { fclose(in); LOG("hud dst open failed: %s", dst_bin); return -1; }
+    char buf[8192]; size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) fwrite(buf, 1, n, out);
+    fclose(in); fclose(out);
+    chmod(dst_bin, 0755);
+
+    /* 复制 Info.plist + PkgInfo + Entitlements.plist */
+    const char *files[] = {"Info.plist", "PkgInfo", "Entitlements.plist"};
+    for (size_t i = 0; i < sizeof(files)/sizeof(files[0]); i++) {
+        char s[1024], d[1024];
+        snprintf(s, sizeof(s), "%s/AilinHUD.app/%s", src_dir, files[i]);
+        snprintf(d, sizeof(d), "%s/%s", dst_app, files[i]);
+        FILE *si = fopen(s, "rb");
+        if (!si) continue;
+        FILE *di = fopen(d, "wb");
+        if (di) {
+            while ((n = fread(buf, 1, sizeof(buf), si)) > 0) fwrite(buf, 1, n, di);
+            fclose(di);
+        }
+        fclose(si);
+    }
+    LOG("HUD bundle installed -> %s", dst_app);
+    return 0;
+}
+
+/* 拉起 AilinHUD：先尝试从 App bundle 复制（手动实例），再 spawn。
+   找不到 bundle 副本时直接 spawn 数据区已有副本（launchd 实例场景）。 */
+static void ensure_hud(void) {
+    char src[1024] = {0};
+    uint32_t sz = sizeof(src);
+    _NSGetExecutablePath(src, &sz);
+    /* 引擎在 App bundle 内时：../AilinHUD.app 同级 */
+    char *slash = strrchr(src, '/');
+    char bundle_src[1024] = {0};
+    if (slash) {
+        snprintf(bundle_src, sizeof(bundle_src), "%.*s/AilinHUD.app", (int)(slash - src), src);
+    }
+    /* 复制（若 bundle 存在） */
+    struct stat st;
+    if (stat(bundle_src, &st) == 0) {
+        copy_hud_bundle(bundle_src);
+    } else {
+        LOG("HUD bundle not next to engine (%s), using installed copy", bundle_src);
+    }
+
+    /* spawn AilinHUD（root） */
+    if (access(HUD_DST_BIN, X_OK) != 0) {
+        LOG("HUD binary missing: %s", HUD_DST_BIN);
+        return;
+    }
+    /* 先杀旧 HUD（防多开） */
+    system("pkill -f AilinHUD.app/AilinHUD 2>/dev/null");
+    usleep(200 * 1000);
+
+    pid_t pid;
+    char *argv[] = {(char*)HUD_DST_BIN, NULL};
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_set_persona_np(&attr, 99, 0);
+    posix_spawnattr_set_persona_uid_np(&attr, 0);
+    posix_spawnattr_set_persona_gid_np(&attr, 0);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | 0x100);
+    int rc = posix_spawn(&pid, HUD_DST_BIN, NULL, &attr, argv, environ);
+    posix_spawnattr_destroy(&attr);
+    if (rc == 0) {
+        LOG("AilinHUD spawned pid=%d", pid);
+    } else {
+        LOG("AilinHUD spawn failed: %s", strerror(rc));
+    }
+}
+
 /* 安装 launchd 守护进程（开机自启 + KeepAlive 崩溃重启） */
 static int ensure_launchd(void) {
     if (copy_self(INSTALL_PATH) != 0) return -1;
@@ -659,6 +758,8 @@ int main(int argc, char *argv[]) {
     });
     dispatch_resume(tcp_src);
     LOG("HTTP listening on :%d (root)", HTTP_PORT);
+
+    ensure_hud();   /* 复制并拉起独立悬浮球进程 AilinHUD（懒人模式） */
 
     /* HID client 已在 hid_init 里 Schedule 到 main runloop；启动 runloop 驱动它 */
     CFRunLoopRun();

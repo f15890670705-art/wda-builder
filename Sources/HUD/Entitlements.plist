@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 全局悬浮窗（懒人同款 SBS 注册） -->
+	<key>com.apple.springboard.accessibility-window-hosting</key>
+	<true/>
+	<key>com.apple.springboard.hudwindow.registered</key>
+	<true/>
+	<!-- backboardd 触摸路由（懒人同款） -->
+	<key>com.apple.backboardd.cancelsTouchesInHostedContent</key>
+	<true/>
+	<key>com.apple.backboardd.hostCanRequireTouchesFromHostedContent</key>
+	<true/>
+	<!-- 后台保活 -->
+	<key>com.apple.springboard.debugapplications</key>
+	<true/>
+	<key>platform-application</key>
+	<true/>
+	<key>get-task-allow</key>
+	<true/>
+</dict>
+</plist>

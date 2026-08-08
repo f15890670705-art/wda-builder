@@ -12,7 +12,6 @@
 #import "FileViewerViewController.h"
 #import "LogViewerViewController.h"
 #import "DirListViewController.h"
-#import "FloatingWindowManager.h"
 #import <AVFoundation/AVFoundation.h>
 #import <sys/socket.h>
 #import <sys/un.h>
@@ -77,9 +76,8 @@ static void crash_handler(NSException *ex) {
                      [[ex callStackSymbols] componentsJoinedByString:@" | "]]);
 }
 
-/* App 回前台/活跃：重新确保悬浮球注册（SpringBoard 可能移除） */
+/* App 回前台/活跃：无需处理（悬浮球由独立 HUD 进程持有，与 App 生命周期无关） */
 - (void)applicationDidBecomeActive:(UIApplication *)application {
-    [FloatingWindowManager.shared reRegisterIfNeeded];
 }
 
 #pragma mark root spawn
@@ -270,30 +268,12 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     /* 崩溃日志：注册 handler，App 被杀原因写到 /tmp 供引擎读取 */
     NSSetUncaughtExceptionHandler(&crash_handler);
 
-    /* App 打开上报（无条件，不依赖悬浮球是否显示）：
-       日志里必须有这条，否则说明 App 进程没起来/没跑新版本 */
+    /* App 打开上报（无条件）：日志里必须有这条，否则说明 App 没起来/没跑新版本 */
     BOOL stopped = [[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED];
-    [FloatingWindowManager.shared reportToEngine:
-        [NSString stringWithFormat:@"app-open stopped=%d ver=%@",
-         stopped, [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"]]];
+    NSLog(@"[AilinTouch] app-open stopped=%d ver=%@", stopped,
+          [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"]);
 
-    /* 全局悬浮球（懒人同款 SBS 注册；点击暂时 toast "123"） */
-    __weak typeof(self) ws0 = self;
-    FloatingWindowManager.shared.onTap = ^{
-        [ws0 showToast:@"123"];
-    };
-    dispatch_async(dispatch_get_main_queue(), ^{
-        /* 上次手动停止过（stopped marker 在）→ 服务是关着的，悬浮球不显示
-           （懒人同款联动：停止服务 = 悬浮球一起关闭） */
-        if ([[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED]) {
-            NSLog(@"[AilinTouch] stopped marker present, floating ball stays hidden");
-            return;
-        }
-        [FloatingWindowManager.shared showFloatingBall];
-    });
-
-    /* 后台保活（懒人同款）：audio session + 循环静音 → App 退后台不挂起，
-       悬浮球（SpringBoard 托管窗口）的触摸事件才能路由回 App 进程 */
+    /* 后台保活（懒人同款）：audio session + 循环静音 → App 退后台不挂起 */
     [self startBackgroundAudioKeepAlive];
 
     /* 按钮回调 */
@@ -303,15 +283,12 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [ws startService];
         [ws showToast:wasRunning ? @"服务已启动" : @"启动服务中"];
         [ws refreshStatus];
-        /* 启动服务 = 系统恢复：悬浮球一起回来（懒人同款联动） */
-        [FloatingWindowManager.shared showFloatingBall];
     };
     self.serviceVC.onTapStop = ^{
         [ws stopEngine];
         [ws showToast:@"服务已停止"];
         [ws refreshStatus];
-        /* 停止服务 = 整个系统关闭：悬浮球一起隐藏（懒人同款联动） */
-        [FloatingWindowManager.shared hideFloatingBall];
+        /* 停止服务：引擎停止 → HUD 进程随之退出 → 悬浮球消失（懒人同款联动） */
     };
     self.serviceVC.onTapRefreshStatus = ^{
         [ws refreshStatus];

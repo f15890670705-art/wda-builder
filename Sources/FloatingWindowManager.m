@@ -102,13 +102,13 @@
         [self pollTouchFile];
     }];
 
-    /* 心跳：每 5 秒上报 App 存活（远程诊断）；
-       后台时幂等重注册（SBS register 幂等，重复注册无副作用，不会抖掉窗口） */
+    /* 心跳：每 5 秒只上报 App 存活（远程诊断）。
+       ⚠️ 后台绝不注册/重建窗口！后台 App 的窗口拿不到 contextID，
+       注册失败 → rebuild → 新窗口后台又拿不到 → 死循环（v1.1.9 实测）。
+       已注册的托管窗口由 SpringBoard 自己管，回前台时再重注册。 */
     self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *t) {
         [self reportToEngine:@"hb-alive"];
-        if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
-            [self registerToSpringBoardWithRetry];
-        }
+        /* 后台不碰窗口，保持现有托管状态 */
     }];
     [self reportToEngine:@"ball-shown"];
 }
@@ -172,8 +172,9 @@
 }
 
 /* 带次数上限的重试：contextID 需要等 WindowServer 分配，首帧可能为 0。
-   ⚠️ 必须有限次：无限递归 + 心跳每 3s 叠加 → 主队列无限堆积 → App 被
-   watchdog 杀死（v1.1.8 实测：reg-ok 后心跳消失 = App 被杀）。 */
+   ⚠️ 后台窗口永远拿不到 contextID（iOS 不给后台 App 窗口分配），
+   所以超限后【不 rebuild】（rebuild 在后台会无限循环，v1.1.9 实测），
+   只静默放弃，等 App 回前台时 applicationDidBecomeActive 再触发注册。 */
 - (void)registerToSpringBoardWithRetry {
     [self registerToSpringBoardAttempt:0];
 }
@@ -182,11 +183,10 @@
     if (!self.floatingWindow) return;
     unsigned int cid = [self windowContextID];
     if (cid == 0) {
-        if (attempt >= 5) {
-            /* 连续拿不到 cid：窗口 context 可能已被回收（后台常见），
-               重建窗口拿全新的 contextID 再注册 */
-            [self reportToEngine:@"cid-giveup-rebuild"];
-            [self rebuildFloatingWindow];
+        if (attempt >= 10) {
+            /* 前台窗口 3 秒都拿不到 contextID（正常不会发生）；
+               放弃本轮，回前台时重新触发。不 rebuild —— 那是死循环根源 */
+            [self reportToEngine:@"cid-giveup-wait-foreground"];
             return;
         }
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
@@ -232,24 +232,6 @@
     /* HUD 注册通知（懒人同款） */
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
         CFSTR("com.apple.hudservices.windowRegistered"), NULL, NULL, true);
-}
-
-/* 重建悬浮窗口：销毁旧窗口（含 contextID），创建全新窗口拿新 contextID。
-   后台时旧窗口的 CA context 会被 SpringBoard/WindowServer 回收，
-   重建是拿回有效 contextID 的唯一可靠办法。 */
-- (void)rebuildFloatingWindow {
-    if (!self.floatingWindow) return;
-    /* 先停掉旧 timer，showFloatingBall 会重建 */
-    [self.touchTimer invalidate];
-    self.touchTimer = nil;
-    [self.hbTimer invalidate];
-    self.hbTimer = nil;
-    [self unregisterFromSpringBoard];
-    self.floatingWindow.hidden = YES;
-    self.floatingWindow = nil;
-    self.ball = nil;
-    self.registered = NO;
-    [self showFloatingBall];
 }
 
 - (void)unregisterFromSpringBoard {

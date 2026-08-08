@@ -35,17 +35,14 @@
    重写 hitTest：只有命中悬浮球才响应，命中窗口自身/透明背景 → 返回 nil → 穿透
    给下层主窗口（TabBar 等照常可点）。
 
-   ★ v1.6.4 照懒人 MyCustomWindow 反汇编铁证（字符串池 0x8126f/0x8454f + 40+ selref）：
-   懒人的自定义窗口类 MyCustomWindow override 了一批 UIKit 私有 getter 返回 YES，
-   iOS 15+ 的 UIWindow 只有这些 getter 返回 YES 时，WindowServer 才把窗口当作
-   【托管窗口】处理（分配有效 contextID + 全局显示 + 不被回收）：
-     - _isWindowServerHostingManaged   ← 关键！WindowServer 托管标志
-     - _canShowWhileLocked             ← 锁屏可见
-     - _ignoresOcclusionReasons        ← 不被遮挡回收
-     - isInternalWindow                ← 系统内部窗口
-   ⚠️ v1.6.3 用 KVC setValue:forKey: 写这些 key —— 部分 key 的 setter 内部带
-   断言，设置后 UIKit 在后续 runloop SIGABRT（App 启动即崩，日志只剩引擎 start）。
-   正确姿势 = getter override（只读，不触发 setter 断言），懒人就是这么做的。 */
+   ★ v1.6.8 照懒人 MyCustomWindow 完整类结构反汇编铁证（class_ro_t@0x1000be708）：
+   懒人 override 的是【类方法】不是实例方法！且返回值照原样：
+     +_isSystemWindow              → YES
+     +_shouldResizeWithScene       → YES
+     +_isSettingFirstResponder     → YES
+     +_isWindowServerHostingManaged → NO   （v1.6.4 错误地 override 实例方法且返回 YES！）
+     +isInternalWindow             → NO
+   用类方法 override（+ 号），UIKit 通过类对象查询这些私有接口。 */
 @interface FloatingBallWindow : UIWindow
 @end
 
@@ -58,11 +55,15 @@
     return hit;       /* 悬浮球（ball 及其子视图）→ 正常响应 */
 }
 
-/* ★ v1.6.4: 懒人 MyCustomWindow 同款私有 getter override（WindowServer 托管标志） */
-- (BOOL)_isWindowServerHostingManaged { return YES; }
-- (BOOL)_canShowWhileLocked { return YES; }
-- (BOOL)_ignoresOcclusionReasons { return YES; }
-- (BOOL)isInternalWindow { return YES; }
+/* ★ v1.6.8 照懒人 MyCustomWindow：类方法 override（懒人是 + 号元类方法） */
++ (BOOL)_isSystemWindow { return YES; }
++ (BOOL)_shouldResizeWithScene { return YES; }
++ (BOOL)_isSettingFirstResponder { return YES; }
++ (BOOL)_isWindowServerHostingManaged { return NO; }
++ (BOOL)isInternalWindow { return NO; }
++ (BOOL)_ignoresHitTest { return NO; }
++ (BOOL)_isSecure { return NO; }
++ (BOOL)_shouldCreateContextAsSecure { return NO; }
 @end
 
 @interface FloatingWindowManager ()
@@ -386,18 +387,33 @@
         return;
     }
 
-    /* ★ v1.6.2 照懒人反汇编 tryRegisterWithAccessibilityController (0x10004d978)：
-       懒人【每次 alloc 新 controller】注册（bl alloc; bl init 存 ivar），不复用！
-       注释"复用同实例"是我之前理解错——SBS 托管窗口每次注册要新实例。 */
+    /* ★ v1.6.8 照懒人 tryRegisterWithAccessibilityController (0x10004d978) 完整反汇编：
+       懒人【每次 alloc 新 controller】+ 【NSInvocation 动态调用】！
+       关键：懒人用 methodSignatureForSelector: 取【运行时真实签名】再
+       setArgument:atIndex: 传参 —— 参数类型完全按真实签名（cid 可能 4 字节、
+       atLevel 可能是 double/float），不会像直接调用那样编译期签名猜错错位。
+       v1.6.2-1.6.7 直接 [controller registerWindowWithContextID:atLevel:] 用的
+       是 @interface 里猜的 (double) 签名 —— 若真实是 float 就参数错位注册无效！
+       照懒人改 NSInvocation 动态调用。 */
     self.hostingController = [[cls alloc] init];
-    /* ⚠️ v1.5.3: SBS 私有方法调用包 @try——iOS 版本差异/签名变化会直接崩 */
     @try {
-        if ([self.hostingController respondsToSelector:@selector(registerWindowWithContextID:atLevel:)]) {
-            [self.hostingController registerWindowWithContextID:cid
-                                                       atLevel:self.floatingWindow.windowLevel];
-            self.registered = YES;
-            NSLog(@"[Floating] registered contextID=%u level=%.0f", cid, self.floatingWindow.windowLevel);
-            [self reportToEngine:[NSString stringWithFormat:@"reg-ok-%u", cid]];
+        SEL sel = @selector(registerWindowWithContextID:atLevel:);
+        if ([self.hostingController respondsToSelector:sel]) {
+            NSMethodSignature *sig = [self.hostingController methodSignatureForSelector:sel];
+            if (sig) {
+                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                [inv setTarget:self.hostingController];
+                [inv setSelector:sel];
+                [inv setArgument:&cid atIndex:2];
+                double level = (double)self.floatingWindow.windowLevel;
+                [inv setArgument:&level atIndex:3];
+                [inv invoke];
+                self.registered = YES;
+                NSLog(@"[Floating] registered contextID=%u level=%.0f", cid, self.floatingWindow.windowLevel);
+                [self reportToEngine:[NSString stringWithFormat:@"reg-ok-%u", cid]];
+            } else {
+                [self reportToEngine:@"sbs-no-signature"];
+            }
         } else {
             [self reportToEngine:@"sbs-no-selector"];
         }

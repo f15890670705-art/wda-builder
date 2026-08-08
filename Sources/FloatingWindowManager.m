@@ -120,21 +120,18 @@
     CGRect full = windowScene ? windowScene.coordinateSpace.bounds : [UIScreen mainScreen].bounds;
     CGFloat y = full.size.height / 2 - size;
 
-    self.floatingWindow = [[FloatingBallWindow alloc] initWithWindowScene:windowScene];
-    if (!self.floatingWindow) {
-        /* 兜底：scene 为 nil 时退回旧姿势 */
-        self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
-        self.floatingWindow.windowScene = windowScene;
-    }
-    /* ★ v1.5.8: 窗口 level = 20000002（懒人 setupHUDWindow 0x10004d6e8 铁证，
-       SBS 托管窗口必须远超所有 App 窗口才全局显示） */
+    /* ★ v1.6.5 照懒人 setupHUDWindow (0x10004d6e8) 完整反汇编铁证改：
+       懒人窗口 = [[MyCustomWindow alloc] initWithFrame:UIScreen.mainScreen.bounds]
+       —— 【不绑定 windowScene】！懒人是 daemon（SBAppIsDaemon+HideAtLaunch），
+       窗口由 WindowServer 直接托管，不经过 scene 生命周期 → scene 挂起不影响。
+       v1.6.0 改成 initWithWindowScene: 把窗口绑到主 App 的 scene → 用户切后台
+       scene 挂起 → 窗口画面冻结 → SBS 托管失效 → 球消失 = 全局不持久的根因！
+       （配合 v1.6.5 禁用 touch monitor —— 懒人/AutoGo 都无引擎级 HID 旁听，
+       球点击用 UITapGestureRecognizer，见 FloatingBall.m） */
+    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
+    /* ⚠️ 故意不设置 windowScene —— 照懒人，窗口独立于 scene 由 WindowServer 托管 */
     self.floatingWindow.windowLevel = 20000002;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
-
-    /* ★ v1.6.3 已移除：KVC setValue 写 _isWindowServerHostingManaged 等私有 key
-       会让 UIKit 在后续 runloop SIGABRT（App 启动即崩，日志只剩引擎 start）。
-       v1.6.4 改为 FloatingBallWindow 子类 override 这些私有 getter（懒人 MyCustomWindow
-       同款姿势，见类定义处）——getter 只读不触发 setter 断言，安全且同样生效。 */
 
     /* 轻量 root VC 承载悬浮球 */
     UIViewController *vc = [UIViewController new];
@@ -152,13 +149,11 @@
        scene 模式下没有这个顾虑（主窗口仍 visible 显示）。 */
     [self.floatingWindow makeKeyAndVisible];
 
-    /* ★ v1.6.1: UIRootWindowScenePresentationBinder 绑定窗口 scene 到系统
-       root window 层（懒人/AutoGo 反汇编铁证）。这一步让窗口显示在
-       SpringBoard root window scene 上，独立于 App 生命周期 ——
-       切后台 scene 挂起后窗口仍全局显示。必须在窗口创建后立即绑定。 */
-    if (windowScene) {
-        [self bindToRootWindowScene:windowScene];
-    }
+    /* ★ v1.6.5 删除 binder 绑定：懒人 RootService 完整反汇编证明——
+       懒人没有 UIRootWindowScenePresentationBinder！窗口就是
+       initWithFrame + makeKeyAndVisible + SBS 注册（daemon 窗口由
+       WindowServer 直接托管）。binder 是 AutoGo agoverlayd（纯 C 进程
+       手动建 FBScene）才需要的，我们 App 内窗口不需要。 */
 
     /* 立即注册（若 contextID 尚未分配会失败，走 retry 补齐） */
     [self registerToSpringBoardWithRetry];

@@ -74,6 +74,12 @@
 	<true/>
 	<key>com.apple.springboard.hudwindow.registered</key>
 	<true/>
+	<!-- backboardd 触摸路由（懒人同款）：让 SpringBoard 托管的 hosted 窗口能接收触摸事件，
+	     否则悬浮球只在 App 前台可点，退后台触摸穿透给前台 App -->
+	<key>com.apple.backboardd.cancelsTouchesInHostedContent</key>
+	<true/>
+	<key>com.apple.backboardd.hostCanRequireTouchesFromHostedContent</key>
+	<true/>
 
 	<!-- ========== root 引擎（touch_engine）相关 ========== -->
 	<!-- persona 管理：允许 posix_spawn persona(99)/uid 0 拉起 root 子进程（Ailin 同款） -->

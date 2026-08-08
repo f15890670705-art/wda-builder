@@ -18,6 +18,18 @@
 - (void)unregisterWindowWithContextID:(unsigned int)contextID;
 @end
 
+/* ★ v1.6.1 照懒人/AutoGo 反汇编铁证：iOS13+ 悬浮球正确姿势 =
+   UIRootWindowScenePresentationBinder 把窗口绑定到系统 root window scene
+   （懒人 RootService 符号表有 UIRootWindowScenePresentationBinder + addScene: +
+   setBinder:；AutoGo agoverlayd 也是 ovBindWindowSceneFromBinder）。
+   只 SBS 注册不够：窗口 bind 在主 App scene 上，切后台 scene 挂起 → contextID
+   变垃圾大数（设备日志 reg-ok-233044077→3077728→...每次不同）→ 球消失。
+   binder 绑定后窗口显示在系统 root window 层，独立于 App 生命周期。 */
+@interface UIRootWindowScenePresentationBinder : NSObject
++ (instancetype)new;   /* 私有类，运行时 NSClassFromString */
+- (void)addScene:(id)scene;
+@end
+
 /* 穿透窗口：SBS 托管需要全屏窗口（context 稳定不消失），但全屏窗口默认会把
    整个屏幕的触摸都拦下来（hitTest 无子视图命中时返回 self，不是 nil！）。
    重写 hitTest：只有命中悬浮球才响应，命中窗口自身/透明背景 → 返回 nil → 穿透
@@ -37,6 +49,7 @@
 
 @interface FloatingWindowManager ()
 @property (nonatomic, strong) id hostingController;
+@property (nonatomic, strong) id rootBinder;        /* ★ v1.6.1 UIRootWindowScenePresentationBinder 实例 */
 @property (nonatomic, assign) BOOL registered;
 @property (nonatomic, strong) FloatingBall *ball;
 @property (nonatomic, strong) NSTimer *touchTimer;
@@ -116,6 +129,14 @@
        scene 模式下没有这个顾虑（主窗口仍 visible 显示）。 */
     [self.floatingWindow makeKeyAndVisible];
 
+    /* ★ v1.6.1: UIRootWindowScenePresentationBinder 绑定窗口 scene 到系统
+       root window 层（懒人/AutoGo 反汇编铁证）。这一步让窗口显示在
+       SpringBoard root window scene 上，独立于 App 生命周期 ——
+       切后台 scene 挂起后窗口仍全局显示。必须在窗口创建后立即绑定。 */
+    if (windowScene) {
+        [self bindToRootWindowScene:windowScene];
+    }
+
     /* 立即注册（若 contextID 尚未分配会失败，走 retry 补齐） */
     [self registerToSpringBoardWithRetry];
 
@@ -171,6 +192,31 @@
     self.floatingWindow.hidden = YES;
     self.floatingWindow = nil;
     self.ball = nil;
+}
+
+/* ★ v1.6.1: UIRootWindowScenePresentationBinder 绑定（懒人/AutoGo 反汇编铁证）。
+   创建 binder 实例，把窗口的 scene addScene: 进去 → 窗口显示在系统 root window
+   层。这是 iOS13+ 悬浮球"全局 + 持久"的核心机制，纯 SBS 注册做不到。 */
+- (void)bindToRootWindowScene:(UIWindowScene *)windowScene {
+    @try {
+        Class binderCls = NSClassFromString(@"UIRootWindowScenePresentationBinder");
+        if (!binderCls) {
+            [self reportToEngine:@"binder-class-missing"];
+            return;
+        }
+        if (!self.rootBinder) {
+            self.rootBinder = [[binderCls alloc] init];
+            [self reportToEngine:@"binder-created"];
+        }
+        if ([self.rootBinder respondsToSelector:@selector(addScene:)]) {
+            [self.rootBinder addScene:windowScene];
+            [self reportToEngine:@"binder-addscene-ok"];
+        } else {
+            [self reportToEngine:@"binder-no-addscene"];
+        }
+    } @catch (NSException *e) {
+        [self reportToEngine:@"binder-exception"];
+    }
 }
 
 /* App 回前台/活跃时调用：确保悬浮球仍注册在 SpringBoard。

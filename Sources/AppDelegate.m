@@ -276,6 +276,12 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [ws0 showToast:@"123"];
     };
     dispatch_async(dispatch_get_main_queue(), ^{
+        /* 上次手动停止过（stopped marker 在）→ 服务是关着的，悬浮球不显示
+           （懒人同款联动：停止服务 = 悬浮球一起关闭） */
+        if ([[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED]) {
+            NSLog(@"[AilinTouch] stopped marker present, floating ball stays hidden");
+            return;
+        }
         [FloatingWindowManager.shared showFloatingBall];
     });
 
@@ -290,11 +296,15 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [ws startService];
         [ws showToast:wasRunning ? @"服务已启动" : @"启动服务中"];
         [ws refreshStatus];
+        /* 启动服务 = 系统恢复：悬浮球一起回来（懒人同款联动） */
+        [FloatingWindowManager.shared showFloatingBall];
     };
     self.serviceVC.onTapStop = ^{
         [ws stopEngine];
         [ws showToast:@"服务已停止"];
         [ws refreshStatus];
+        /* 停止服务 = 整个系统关闭：悬浮球一起隐藏（懒人同款联动） */
+        [FloatingWindowManager.shared hideFloatingBall];
     };
     self.serviceVC.onTapRefreshStatus = ^{
         [ws refreshStatus];

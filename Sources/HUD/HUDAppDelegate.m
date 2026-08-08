@@ -6,10 +6,13 @@
 //    不依赖 UIKit 自动分配 scene（裸 spawn 进程拿不到），而是用
 //    FBSceneManager 手动创建 FrontBoard 场景 + UIRootWindowScenePresentationBinder
 //    把 UIWindow 直接绑定到系统场景 → 全局悬浮 + 后台可点 + 卸载 App 球还在。
+//    所有私有 API 用 objc_msgSend 动态调用（编译期无声明，避免报错）。
 //
 #import "HUDAppDelegate.h"
 #import "HUDBall.h"
 #import <dlfcn.h>
+#import <objc/message.h>
+#import <objc/runtime.h>
 
 /* 诊断辅助：写 /tmp/ailintouch_hud.alive，引擎 /hud 端点远程读 */
 static void hud_mark(NSString *msg) {
@@ -24,22 +27,27 @@ static void hud_mark(NSString *msg) {
 
     hud_mark(@"appdelegate");
 
-    /* 1. 解析 FrontBoardServices + UIKitCore 私有符号 */
+    /* 1. 加载私有框架 */
     void *fbs = dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
-    void *ui = dlopen("/System/Library/PrivateFrameworks/UIKitCore.framework/UIKitCore", RTLD_NOW);
+    void *ui  = dlopen("/System/Library/PrivateFrameworks/UIKitCore.framework/UIKitCore", RTLD_NOW);
     if (!fbs || !ui) {
         hud_mark(@"dlopen-fail");
         return YES;
     }
 
     /* 2. 显示配置（主屏） */
-    id (*FBDisplayManager_mainConfiguration)(Class, SEL) = (void *)dlsym(fbs, "objc_msgSend");
     Class fbDisplayMgr = NSClassFromString(@"FBDisplayManager");
     id displayConfig = ((id (*)(id, SEL))objc_msgSend)(fbDisplayMgr, sel_registerName("mainConfiguration"));
+    if (!displayConfig) {
+        hud_mark(@"display-config-nil");
+        return YES;
+    }
 
     /* 3. UIRootWindowScenePresentationBinder —— 把窗口绑定到系统场景的关键 */
     Class binderCls = NSClassFromString(@"UIRootWindowScenePresentationBinder");
-    id binder = [[binderCls alloc] initWithPriority:0 displayConfiguration:displayConfig];
+    id binder = ((id (*)(id, SEL, int, id))objc_msgSend)(
+        ((id (*)(id, SEL))objc_msgSend)(binderCls, sel_registerName("alloc")),
+        sel_registerName("initWithPriority:displayConfiguration:"), 0, displayConfig);
     if (!binder) {
         hud_mark(@"binder-nil");
         return YES;
@@ -47,44 +55,57 @@ static void hud_mark(NSString *msg) {
 
     /* 4. 场景定义（identity = bundle id，client = local） */
     Class defCls = NSClassFromString(@"FBSMutableSceneDefinition");
-    id definition = [defCls definition];
-    id identity = [NSClassFromString(@"FBSSceneIdentity") identityForIdentifier:@"com.ailintouch.hud"];
-    id clientId = [NSClassFromString(@"FBSSceneClientIdentity") localIdentity];
-    id spec = [NSClassFromString(@"UIApplicationSceneSpecification") specification];
-    [definition setIdentity:identity];
-    [definition setClientIdentity:clientId];
-    [definition setSpecification:spec];
+    id definition = ((id (*)(id, SEL))objc_msgSend)(defCls, sel_registerName("definition"));
+    Class identityCls = NSClassFromString(@"FBSSceneIdentity");
+    id identity = ((id (*)(id, SEL, id))objc_msgSend)(identityCls,
+        sel_registerName("identityForIdentifier:"), @"com.ailintouch.hud");
+    Class clientIdCls = NSClassFromString(@"FBSSceneClientIdentity");
+    id clientId = ((id (*)(id, SEL))objc_msgSend)(clientIdCls, sel_registerName("localIdentity"));
+    Class specCls = NSClassFromString(@"UIApplicationSceneSpecification");
+    id spec = ((id (*)(id, SEL))objc_msgSend)(specCls, sel_registerName("specification"));
+    ((void (*)(id, SEL, id))objc_msgSend)(definition, sel_registerName("setIdentity:"), identity);
+    ((void (*)(id, SEL, id))objc_msgSend)(definition, sel_registerName("setClientIdentity:"), clientId);
+    ((void (*)(id, SEL, id))objc_msgSend)(definition, sel_registerName("setSpecification:"), spec);
 
     /* 5. 场景参数（全屏 + foreground + 忽略遮挡） */
-    id parameters = [NSClassFromString(@"FBSMutableSceneParameters") parametersForSpecification:spec];
-    id settings = [NSClassFromString(@"UIMutableApplicationSceneSettings") new];
-    [settings setDisplayConfiguration:displayConfig];
-    [settings setFrame:[UIScreen mainScreen].bounds];
-    [settings setForeground:YES];
-    [settings setInterfaceOrientation:1];   /* portrait */
-    [settings setDeviceOrientationEventsEnabled:YES];
+    Class paramsCls = NSClassFromString(@"FBSMutableSceneParameters");
+    id parameters = ((id (*)(id, SEL, id))objc_msgSend)(paramsCls,
+        sel_registerName("parametersForSpecification:"), spec);
+    Class settingsCls = NSClassFromString(@"UIMutableApplicationSceneSettings");
+    id settings = ((id (*)(id, SEL))objc_msgSend)(
+        ((id (*)(id, SEL))objc_msgSend)(settingsCls, sel_registerName("alloc")),
+        sel_registerName("init"));
+    ((void (*)(id, SEL, id))objc_msgSend)(settings, sel_registerName("setDisplayConfiguration:"), displayConfig);
+    ((void (*)(id, SEL, BOOL))objc_msgSend)(settings, sel_registerName("setForeground:"), YES);
+    ((void (*)(id, SEL, int))objc_msgSend)(settings, sel_registerName("setInterfaceOrientation:"), 1);
+    ((void (*)(id, SEL, BOOL))objc_msgSend)(settings, sel_registerName("setDeviceOrientationEventsEnabled:"), YES);
     /* ignoreOcclusionReasons 加 SystemApp：不被系统元素遮挡 */
-    id ignoreReasons = [settings valueForKey:@"ignoreOcclusionReasons"];
+    id ignoreReasons = ((id (*)(id, SEL))objc_msgSend)(settings, sel_registerName("ignoreOcclusionReasons"));
     if (ignoreReasons && [ignoreReasons respondsToSelector:@selector(addObject:)]) {
         [ignoreReasons addObject:@"SystemApp"];
     }
-    [parameters setSettings:settings];
+    ((void (*)(id, SEL, id))objc_msgSend)(parameters, sel_registerName("setSettings:"), settings);
 
-    id clientSettings = [NSClassFromString(@"UIMutableApplicationSceneClientSettings") new];
-    [clientSettings setInterfaceOrientation:1];
-    [clientSettings setStatusBarStyle:0];
-    [parameters setClientSettings:clientSettings];
+    Class clientSettingsCls = NSClassFromString(@"UIMutableApplicationSceneClientSettings");
+    id clientSettings = ((id (*)(id, SEL))objc_msgSend)(
+        ((id (*)(id, SEL))objc_msgSend)(clientSettingsCls, sel_registerName("alloc")),
+        sel_registerName("init"));
+    ((void (*)(id, SEL, int))objc_msgSend)(clientSettings, sel_registerName("setInterfaceOrientation:"), 1);
+    ((void (*)(id, SEL, int))objc_msgSend)(clientSettings, sel_registerName("setStatusBarStyle:"), 0);
+    ((void (*)(id, SEL, id))objc_msgSend)(parameters, sel_registerName("setClientSettings:"), clientSettings);
 
     /* 6. FBSceneManager 创建场景 */
-    id scene = [[NSClassFromString(@"FBSceneManager") sharedInstance]
-        createSceneWithDefinition:definition initialParameters:parameters];
+    Class sceneMgrCls = NSClassFromString(@"FBSceneManager");
+    id sceneMgr = ((id (*)(id, SEL))objc_msgSend)(sceneMgrCls, sel_registerName("sharedInstance"));
+    id scene = ((id (*)(id, SEL, id, id))objc_msgSend)(sceneMgr,
+        sel_registerName("createSceneWithDefinition:initialParameters:"), definition, parameters);
     if (!scene) {
         hud_mark(@"scene-nil");
         return YES;
     }
 
     /* 7. 绑定到窗口展示 */
-    [binder addScene:scene];
+    ((void (*)(id, SEL, id))objc_msgSend)(binder, sel_registerName("addScene:"), scene);
     hud_mark(@"scene-bound");
 
     /* 8. 全屏透明窗口 */

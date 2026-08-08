@@ -69,27 +69,27 @@
     UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
     if (!keyWindow) return;
 
-    /* ⚠️ 窗口必须全屏：SBSAccessibilityWindowHostingController 托管的是窗口的
-       CA context，SpringBoard 对非全屏窗口 context 托管不稳定（显示一帧即被移除）。
-       悬浮球只是全屏透明窗口里的子视图，懒人 overlay window 也是全屏的。 */
+    /* ⚠️ 窗口就是 56×56 小窗口（v1.1.3-1.1.5 验证过能正常全局显示）！
+       v1.1.6 改全屏是错误决策——当时把"显示一下消失"误判为窗口非全屏问题，
+       真正元凶是 contextID 不稳定（v1.2.6 已修）。SBS 托管小窗口完全可行
+       （懒人悬浮球也是小窗口），窗口外区域天然穿透，不需要全屏。 */
     CGFloat size = 56;                          /* 球尺寸 */
     CGFloat x = 20;                             /* 初始靠左 */
     CGFloat y = keyWindow.bounds.size.height / 2 - size;
-    CGRect screen = keyWindow.bounds;
+    CGRect ballFrame = CGRectMake(x, y, size, size);
 
-    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:screen];
+    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:ballFrame];
     self.floatingWindow.windowLevel = UIWindowLevelStatusBar + 100;   /* 高过普通 App 窗口 */
     self.floatingWindow.backgroundColor = [UIColor clearColor];
-    /* 触摸穿透由 FloatingBallWindow hitTest 处理：透明区返回 nil → 不拦下层窗口，
-       只有 ball 区域响应。不能设 userInteractionEnabled=NO（会连 ball 一起禁掉）。 */
+    /* 窗口外区域天然穿透（hitTest 不在窗口 bounds 内），只有球区域响应 */
     self.floatingWindow.hidden = NO;
 
-    /* 轻量 root VC 承载悬浮球（view 全屏透明，球是子视图） */
+    /* 轻量 root VC 承载悬浮球（view 跟随窗口 56×56，球填满） */
     UIViewController *vc = [UIViewController new];
     vc.view.backgroundColor = [UIColor clearColor];
     self.floatingWindow.rootViewController = vc;
 
-    FloatingBall *ball = [[FloatingBall alloc] initWithFrame:CGRectMake(x, y, size, size)];
+    FloatingBall *ball = [[FloatingBall alloc] initWithFrame:CGRectMake(0, 0, size, size)];
     ball.onTap = self.onTap;
     [vc.view addSubview:ball];
     self.ball = ball;
@@ -125,8 +125,12 @@
     float x = 0, y = 0;
     if (sscanf(content.UTF8String, "%f %f", &x, &y) != 2) return;
 
-    /* 球的屏幕坐标：窗口全屏，ball.frame 相对 vc.view（= 屏幕坐标） */
-    CGRect ballFrame = self.ball.frame;
+    /* 球的屏幕坐标 = 窗口 origin + ball.frame.origin（窗口就是球的位置，
+       ball.frame 相对 vc.view (0,0)，所以球屏幕坐标 = window origin） */
+    CGPoint ballOrigin = CGPointMake(self.floatingWindow.frame.origin.x + self.ball.frame.origin.x,
+                                     self.floatingWindow.frame.origin.y + self.ball.frame.origin.y);
+    CGRect ballFrame = CGRectMake(ballOrigin.x, ballOrigin.y,
+                                  self.ball.bounds.size.width, self.ball.bounds.size.height);
     if (CGRectContainsPoint(ballFrame, CGPointMake(x, y))) {
         if (self.onTap) self.onTap();
     }

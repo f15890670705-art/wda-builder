@@ -72,30 +72,31 @@
    v1.5.4: 窗口改回【全屏透明】+ 球子视图（懒人同款）。v1.2.7 的 56×56 小窗口
    context 不稳定——SBS 托管的 context 需要全屏窗口才稳定全局显示，
    切主界面"挺一会"就没了 = 小窗口 context 被回收。全屏窗口 + hitTest 穿透
-   （FloatingBallWindow 已实现：命中自身/透明背景返回 nil）不影响点击。 */
+   （FloatingBallWindow 已实现：命中自身/透明背景返回 nil）不影响点击。
+   ★ v1.6.0 照懒人反汇编（scene:willConnect 0x10001d0d8）铁证：窗口必须用
+   initWithWindowScene: 创建（iOS13+ 正确姿势，窗口真正 attach 到 scene 拿到
+   有效 WindowServer contextID）。之前 initWithFrame:+手动赋值 windowScene
+   → _contextId 拿不到有效值（设备日志 reg-ok-3837087202 每次不同的大数=垃圾）！
+   懒人窗口：MyCustomWindow = [[MyCustomWindow alloc] initWithWindowScene:scene] */
 - (void)showFloatingBallInScene:(UIWindowScene *)windowScene {
     if (self.floatingWindow) return;
 
-    UIWindow *keyWindow = [UIApplication sharedApplication].windows.firstObject;
-    if (!keyWindow) return;
-
     CGFloat size = 56;                          /* 球尺寸 */
     CGFloat x = 20;                             /* 初始靠左 */
-    CGFloat y = keyWindow.bounds.size.height / 2 - size;
 
-    /* ★ v1.5.4: 全屏透明窗口（懒人姿势）—— SBS 托管 context 稳定；
-       球作为子视图放左上，FloatingBallWindow.hitTest 全屏穿透 */
-    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:keyWindow.bounds];
-    /* ★ iOS 13+ scene 生命周期：窗口必须绑 windowScene，否则不显示（v1.5.2） */
-    if (windowScene) {
+    /* ★ v1.6.0: initWithWindowScene:（懒人 scene:willConnect 同款）。
+       窗口 frame 初始为 scene bounds（随后布局球），全屏透明。 */
+    CGRect full = windowScene ? windowScene.coordinateSpace.bounds : [UIScreen mainScreen].bounds;
+    CGFloat y = full.size.height / 2 - size;
+
+    self.floatingWindow = [[FloatingBallWindow alloc] initWithWindowScene:windowScene];
+    if (!self.floatingWindow) {
+        /* 兜底：scene 为 nil 时退回旧姿势 */
+        self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
         self.floatingWindow.windowScene = windowScene;
     }
-    /* ★ v1.5.8 照懒人反汇编（RootService setupHUDWindow 0x10004d6e8）铁证：
-       懒人悬浮球窗口 level = 20000002（2千万级），不是 UIWindowLevelStatusBar+100！
-       v1.5.4-v1.5.7 用 UIWindowLevelStatusBar+100=1100 太低——SBS 托管窗口
-       level 必须远超所有 App 窗口，SpringBoard 才把它显示在所有 App 之上。
-       用户日志 reg-ok-2137088603 是 3 亿级大数 + 球不全局显示 = level 低被
-       SpringBoard 忽略。照懒人原样用 20000002。 */
+    /* ★ v1.5.8: 窗口 level = 20000002（懒人 setupHUDWindow 0x10004d6e8 铁证，
+       SBS 托管窗口必须远超所有 App 窗口才全局显示） */
     self.floatingWindow.windowLevel = 20000002;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
 
@@ -199,31 +200,52 @@
        跟懒人完全一致。 */
 }
 
-/* 取 UIWindow 的 contextID（懒人 safeGetWindowContextID 同思路）。
-   ★ v1.5.9 照懒人反汇编 (0x10004d330) 铁证重写：
-   懒人每次【重新取】（不缓存！）且依次试多个 key：先 _contextId，fallback 试
-   contextId，拿非 0 值即用（unsignedIntValue 转换）。
-   v1.5.8 及之前只试 _contextId 且把值缓存（cachedCid）→ 若某次拿到 CA 内部大数
-   就被永久缓存，心跳一直报同一个错值。修复：不缓存、多 key 依次尝试。
-   注意：iOS 15+ 的 WindowServer contextID 可能就是大数（用户实测第一次注册成功
-   能全局显示），所以不设"小数字"上限误杀，只要求非 0。 */
+/* 取 UIWindow 的 contextID。
+   ★ v1.6.0 照懒人反汇编 safeGetWindowContextID (0x10004d330) 铁证重写：
+   懒人用 NSInvocation 动态调用窗口的 _contextId / contextId 方法（不是简单
+   KVC！），拿到后做 isKindOfClass:NSNumber 类型校验，再 unsignedIntValue。
+   v1.5.9 用 valueForKey 拿到的值每次不同（设备日志 reg-ok-3837087202 → ...）
+   = KVC 在这个 iOS 版本上拿不到有效 contextID。
+   正确姿势：respondsToSelector + NSMethodSignature + NSInvocation 直接调方法。
+   注意：WindowServer contextID 可能是大数（iOS15+），不做"小数字"上限过滤，
+   只要求类型是 NSNumber 且非 0。 */
 - (unsigned int)windowContextID {
     if (!self.floatingWindow) return 0;
-    /* 依次尝试多个 key（懒人同款）：_contextId → contextId，每次重新取不缓存 */
-    NSArray *keys = @[@"_contextId", @"contextId"];
-    for (NSString *key in keys) {
-        @try {
-            id cid = [self.floatingWindow valueForKey:key];
-            if (cid && [cid respondsToSelector:@selector(unsignedIntValue)]) {
-                unsigned int v = [cid unsignedIntValue];
-                if (v != 0) {
-                    self.cachedCid = v;   /* 记录最近值（诊断用，不用于跳过重取） */
-                    return v;
-                }
+    /* 依次尝试多个方法名（懒人同款）：_contextId → contextId */
+    NSArray *sels = @[@"_contextId", @"contextId"];
+    for (NSString *selName in sels) {
+        SEL sel = NSSelectorFromString(selName);
+        if (![self.floatingWindow respondsToSelector:sel]) {
+            [self reportToEngine:[NSString stringWithFormat:@"cid-no-sel-%@", selName]];
+            continue;
+        }
+        /* NSInvocation 动态调用（懒人 safeGetWindowContextID 同款：
+           methodSignatureForSelector + setTarget + setSelector + invoke + getReturnValue） */
+        NSMethodSignature *sig = [self.floatingWindow methodSignatureForSelector:sel];
+        if (!sig) continue;
+        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+        [inv setTarget:self.floatingWindow];
+        [inv setSelector:sel];
+        [inv invoke];
+        if (sig.methodReturnLength == 0) continue;
+        /* 返回值可能是 NSNumber 对象（对象类型）或直接 unsigned int（标量） */
+        if (sig.methodReturnType[0] == '@') {
+            /* 对象返回：isKindOfClass:NSNumber 校验（懒人 0x10006c38c 同款） */
+            __unsafe_unretained id ret = nil;
+            [inv getReturnValue:&ret];
+            if (ret && [ret isKindOfClass:[NSNumber class]]) {
+                unsigned int v = [ret unsignedIntValue];
+                if (v != 0) { self.cachedCid = v; return v; }
             }
-        } @catch (NSException *e) {
-            /* key 不存在：继续试下一个 */
-            [self reportToEngine:[NSString stringWithFormat:@"cid-kvc-%@-ex", key]];
+            [self reportToEngine:[NSString stringWithFormat:@"cid-not-number-%@", selName]];
+        } else if (sig.methodReturnLength == 4) {
+            /* 标量 unsigned int 返回 */
+            unsigned int v = 0;
+            [inv getReturnValue:&v];
+            if (v != 0) { self.cachedCid = v; return v; }
+            [self reportToEngine:[NSString stringWithFormat:@"cid-zero-%@", selName]];
+        } else {
+            [self reportToEngine:[NSString stringWithFormat:@"cid-badtype-%@-%s", selName, sig.methodReturnType]];
         }
     }
     return 0;

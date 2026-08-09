@@ -36,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.7"
+#define ENGINE_VERSION "1.8.8"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -321,7 +321,8 @@ static void handle_client(int cfd) {
     ssize_t n = read(cfd, buf, sizeof(buf)-1);
     if (n <= 0) { close(cfd); return; }
 
-    char reply[16384];   /* /log 返回尾部 80 行日志，必须大缓冲区（之前 256 截断） */
+    char reply[65536];   /* ★ v1.8.8 /log 返回 400 行日志（之前 80 行太少——
+                            启动流水+心跳几秒就刷没了，用户质疑"80行能干啥"）*/
     /* HTTP 请求：GET /tap?x=..&y=.. HTTP/1.1 */
     if (strncmp(buf, "GET ", 4) == 0) {
         char path[256] = {0};
@@ -384,10 +385,9 @@ static void handle_client(int cfd) {
             }
         } else if (strncmp(path, "/log", 4) == 0) {
             /* ★ v1.8.7 启动流水在前：先读 App 日志（启动阶段流水），再读引擎
-               日志（持久区优先，sandbox 实例降级 /tmp）。尾部 80 行截断时
-               App 启动流水排最前面不被挤掉（v1.8.6 排后面被挤 → 用户看到
-               "app启动日志依然没有"）。 */
-            char lbuf[16384] = {0};
+               日志（持久区优先，sandbox 实例降级 /tmp）。★ v1.8.8 行数
+               80 → 400（用户质疑"80行能干啥"，启动流水+心跳几秒就刷没了）。 */
+            char lbuf[65536] = {0};
             size_t ln = 0;
             FILE *af = fopen("/tmp/ailintouch_app.log", "r");
             if (af) {
@@ -406,7 +406,7 @@ static void handle_client(int cfd) {
             /* 取尾部 */
             char *tail = lbuf + ln;
             int lines = 0;
-            while (tail > lbuf && lines < 80) {
+            while (tail > lbuf && lines < 400) {
                 tail--;
                 if (*tail == '\n') lines++;
             }

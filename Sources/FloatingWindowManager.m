@@ -235,11 +235,14 @@
     /* 立即注册（若 contextID 尚未分配会失败，走 retry 补齐） */
     [self registerToSpringBoardWithRetry];
 
-    /* ★ v1.8.47 主 App 进程内创建独立二进制 FBScene（主 App 是合法 app 身份，
-       FrontBoard 认可 → createScene 断言能过；HUD 独立进程 v1.8.42/45 断言
-       失败 FBSceneManager.m:462 就是身份问题）。创建成功 + binder 绑系统
-       root window 层 → 独立 scene 不随 app main scene 挂起 → 球切后台全局。 */
-    [self createIndependentFBScene];
+    /* ★ v1.8.51 禁用主 App 进程内 createScene！
+       v1.8.50 实测崩溃铁证（crash report AilinTouch-2026-08-09-181635.ips）：
+       Exception Type EXC_BREAKPOINT (SIGTRAP)，栈顶 3 帧全是 FrontBoard ——
+       主 App 已有自己的 scene session，FrontBoard 不允许 app 进程内再创建
+       独立二进制 scene（直接 trap 崩 App，不是可捕获异常）。
+       独立 scene 的创建必须在【独立进程】（HUD，无 app scene 约束）里做。
+       HUD 侧负责 createScene（v1.8.51），主 App 只做窗口 + SBS 注册。 */
+    [self reportToEngine:@"fb-create-disabled-in-app"];
 
     /* ★ v1.8.20 删除触摸轮询（touchTimer 0.15s 读文件）——高频文件 I/O
        卡顿源之一，且用户早已指出该方案不行。球点击保留前台 tap 手势，

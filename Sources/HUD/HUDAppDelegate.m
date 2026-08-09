@@ -30,9 +30,23 @@
 + (BOOL)_isSecure { return YES; }
 + (BOOL)_isSystemWindow { return YES; }
 - (BOOL)_isWindowServerHostingManaged { return NO; }
-- (BOOL)_ignoresHitTest { return YES; }
+/* ★ v1.8.62 _ignoresHitTest 改 NO：v1.8.60 照 Letterpress 原样 YES（纯显示悬浮窗）
+   导致窗口忽略所有触摸 → 球拖不动（HUDBall 的 pan 手势收不到事件）。
+   我们要拖动 → 必须接收触摸。透明区域由 hitTest 返回 nil 穿透（照主 App
+   FloatingBallWindow v1.6.8 同款）。 */
+- (BOOL)_ignoresHitTest { return NO; }
 - (BOOL)_isSecure { return YES; }
 - (BOOL)_shouldCreateContextAsSecure { return YES; }
+
+/* 穿透：命中窗口自身/rootVC 全屏透明背景 → nil（下层可点）；
+   命中悬浮球（HUDBall 及子视图）→ 正常响应（拖动/点击）。 */
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hit = [super hitTest:point withEvent:event];
+    if (hit == self || hit == self.rootViewController.view) {
+        return nil;
+    }
+    return hit;
+}
 @end
 
 /* UIWindow 私有（Letterpress UIWindow+Private.h 同款）。

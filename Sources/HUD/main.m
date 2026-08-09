@@ -11,10 +11,14 @@
 //
 #import <UIKit/UIKit.h>
 #import <pthread.h>
+#import <spawn.h>
 #import <mach-o/dyld.h>
 #import <sys/stat.h>
+#import <sys/wait.h>
 #import <signal.h>
 #import "HUDAppDelegate.h"
+
+extern char **environ;   /* v1.8.47 posix_spawn launchctl 用 */
 
 /* 诊断辅助：写 /tmp/ailintouch_hud.alive（引擎 /hud 可读）+ /tmp/ailintouch_hud.log
    （引擎 /log?src=hud 可读，带 [HH:mm:ss.SSS] 时间戳）。全部依赖文件，无网络。 */

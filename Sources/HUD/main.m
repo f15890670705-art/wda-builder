@@ -11,6 +11,8 @@
 #import <sys/socket.h>
 #import <netinet/in.h>
 #import <pthread.h>
+#import <mach-o/dyld.h>
+#import <sys/stat.h>
 #import "HUDAppDelegate.h"
 
 /* 诊断辅助：写 /tmp/ailintouch_hud.alive，远程 /hud 端点可读 */

@@ -430,12 +430,11 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [self pollEngineReady];
     }
 
-    /* ★ v1.8.20 降频 5s→30s：refreshStatus 做 unix socket STATUS + 设备
-       信息收集（sysctl），用户铁证"手机特别卡"+ 明确说 5 秒获取没用 ——
-       UI 状态刷新 30s 一次足够 */
-    [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer *t) {
-        [self refreshStatus];
-    }];
+    /* ★ v1.8.21 状态刷新改为【事件驱动】，删除 30s 定时轮询（用户建议：
+       引擎关闭了就刷新一下，为什么非要自动刷新）。
+       刷新时机：① 启动首次（下方立即刷新）；② 用户点启动/停止（onTapStart/
+       onTapStop 回调内）；③ 用户点手动刷新（onTapRefreshStatus）；④ 进入
+       服务管理页面（VC viewWillAppear）。无任何定时轮询。 */
     [self refreshStatus];
 
     return YES;

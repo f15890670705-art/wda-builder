@@ -129,6 +129,13 @@
     [self refreshAll];
 }
 
+/* ★ v1.8.21 进入页面时刷新一次状态（事件驱动替代定时轮询——用户建议
+   "引擎关闭了就刷新一下，不用自动刷新"） */
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    if (self.onTapRefreshStatus) self.onTapRefreshStatus();
+}
+
 #pragma mark - 构建 UI
 
 - (void)buildUI {

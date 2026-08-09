@@ -73,8 +73,7 @@
 @property (nonatomic, strong) FloatingBall *ball;
 @property (nonatomic, strong) NSTimer *touchTimer;
 @property (nonatomic, strong) NSTimer *hbTimer;      /* 心跳：定期重注册 + 上报 App 存活（诊断） */
-@property (nonatomic, strong) NSTimer *hiddenKeepTimer; /* v1.8.4 0.5s 强制窗口可见 */
-@property (nonatomic, strong) NSTimer *sceneFollowTimer; /* v1.8.4 1s 跟随前台 scene */
+@property (nonatomic, strong) NSTimer *sceneFollowTimer; /* v1.8.4 1s 跟随前台 scene（v1.8.13 保留） */
 @property (nonatomic, assign) unsigned int cachedCid;  /* 同一窗口 contextID 不变，拿到一次缓存复用 */
 @end
 
@@ -206,57 +205,35 @@
         [self reportToEngine:@"root-scene-nil-fallback-main"];
     }
 
-    /* ★ v1.8.12 核心改动：先试【不绑 scene】窗口（懒人 setupHUDWindow 姿势：
-       initWithFrame + level 20000002 + makeKeyAndVisible + SBS 注册）。
-       懒人是 daemon（SBAppIsDaemon），WindowServer 给 daemon 的不绑 scene
-       窗口也分配 contextID，且【不受 scene 生命周期控制】→ 切后台不隐藏！
-       这就是懒人"切后台球还在"的机制。
-       v1.6.6/v1.7.2 不绑 scene 失败（cid=0）= 当时 daemon 化未生效
-       （SpringBoard 未重读 SBAppIsDaemon，必须重启手机——用户铁证"每次
-       重启手机他才真的重启"）。现在 daemon 化已生效，重试不绑 scene。
-       若仍拿不到 cid（daemon 化无效），自动 fallback 绑 scene（v1.8.3-11
-       已验证的可靠路径，球能显示只是切后台消失）。 */
-    BOOL noSceneMode = YES;
-    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
+    /* ★ v1.8.13 恢复最简可靠路径：直接绑 scene（v1.8.3-11 已验证球显示）。
+       v1.8.12 不绑 scene 两次实测（12:27/12:42）均 cid-zero-fallback ——
+       确认我们环境（TrollStore + 前台 App）下 WindowServer 不给不绑 scene
+       窗口分配 contextID，daemon 化无此能力，懒人靠的是别的机制（其窗口
+       在 RootService daemon 进程中）。不再尝试，直接绑 scene 保证显示。 */
+    self.floatingWindow = [[FloatingBallWindow alloc] initWithWindowScene:bindScene];
+    if (!self.floatingWindow) {
+        /* 兜底：scene 为 nil 时退回旧姿势 */
+        self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
+        self.floatingWindow.windowScene = bindScene;
+    }
     self.floatingWindow.windowLevel = 20000002;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
+
+    /* 轻量 root VC 承载悬浮球 */
     UIViewController *vc = [UIViewController new];
     vc.view.backgroundColor = [UIColor clearColor];
     self.floatingWindow.rootViewController = vc;
+
     FloatingBall *ball = [[FloatingBall alloc] initWithFrame:CGRectMake(x, y, size, size)];
     ball.onTap = self.onTap;
     [vc.view addSubview:ball];
     self.ball = ball;
-    [self.floatingWindow makeKeyAndVisible];
-    if ([self windowContextID] == 0) {
-        /* daemon 化未生效 / 不绑 scene 拿不到 cid → fallback 绑 scene */
-        [self reportToEngine:@"nosccene-cid-zero-fallback-scene"];
-        self.floatingWindow = nil;
-        self.floatingWindow = [[FloatingBallWindow alloc] initWithWindowScene:bindScene];
-        self.floatingWindow.windowLevel = 20000002;
-        self.floatingWindow.backgroundColor = [UIColor clearColor];
-        UIViewController *vc2 = [UIViewController new];
-        vc2.view.backgroundColor = [UIColor clearColor];
-        self.floatingWindow.rootViewController = vc2;
-        FloatingBall *ball2 = [[FloatingBall alloc] initWithFrame:CGRectMake(x, y, size, size)];
-        ball2.onTap = self.onTap;
-        [vc2.view addSubview:ball2];
-        self.ball = ball2;
-        [self.floatingWindow makeKeyAndVisible];
-        noSceneMode = NO;
-    } else {
-        [self reportToEngine:@"nosccene-cid-ok-daemon-mode"];
-    }
 
-    /* ★ v1.7.3 恢复 binder 绑定（用户"二进制 scene"铁证）：
-       懒人 RootService 含 UIRootWindowScenePresentationBinder +
-       FBSceneManager + createSceneWithDefinition 符号 —— 窗口的二进制
-       FBScene（windowScene._fbScene）addScene 到 binder → 窗口绑定到
-       系统 root window scene → 全局显示且不随 App scene 挂起。
-       ★ v1.8.12 只在绑 scene 路径用 binder（不绑 scene 的窗口无 scene 可绑） */
-    if (!noSceneMode && bindScene) {
-        [self bindToRootWindowScene:bindScene];
-    }
+    /* ★ v1.5.6: makeKeyAndVisible（懒人同款）—— iOS13+ scene 模式多窗口共存，
+       窗口必须 makeKeyAndVisible 才会被 WindowServer 分配 contextID + SBS 托管。
+       v1.1.x 因 legacy 单窗口模式抢 key window 回退成 hidden=NO，
+       scene 模式下没有这个顾虑（主窗口仍 visible 显示）。 */
+    [self.floatingWindow makeKeyAndVisible];
 
     /* 立即注册（若 contextID 尚未分配会失败，走 retry 补齐） */
     [self registerToSpringBoardWithRetry];
@@ -284,24 +261,18 @@
         [self registerToSpringBoardWithRetry];
     }];
 
-    /* ★ v1.8.4 双保险（用户铁证：切后台球立即消失 = v1.8.3 绑 main scene
-       被系统强制 hidden）：
-       ① hiddenKeepTimer(0.5s)：窗口被系统改 hidden=YES 立即 setHidden:NO 复活。
-          NSRunLoopCommonModes 保证后台模式也触发（NSTimer 默认 default mode
-          在后台 runloop 可能不回调）。懒人 daemon 窗口永活，我们前台 App
-          必须主动维持。 */
-    self.hiddenKeepTimer = [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:YES block:^(NSTimer *t) {
-        if (self.floatingWindow && self.floatingWindow.hidden) {
-            self.floatingWindow.hidden = NO;
-            [self reportToEngine:@"hidden-revive"];
-        }
-    }];
-    [[NSRunLoop mainRunLoop] addTimer:self.hiddenKeepTimer forMode:NSRunLoopCommonModes];
+    /* ★ v1.8.13 删除 hiddenKeepTimer：v1.8.12 实测 reg-ok 的 contextID 每
+       15 秒心跳都在变（2874493361→279838510→709162564→2901182776→92634869）
+       —— 强烈怀疑 hiddenKeepTimer 反复 setHidden:NO 与系统强压互相拉扯，
+       导致窗口反复 attach/detach → contextID 每轮重分配 → SBS 托管不稳。
+       删掉它，依赖 hbTimer(15s) 幂等重注册 + applicationDidBecomeActive 重注册。
+       （若切后台球消失，说明问题在 scene 激活状态，setHidden 强顶无效，
+       保留它只会让 cid 一直抖。） */
 
-    /* ② sceneFollowTimer(1s)：跟随当前前台 scene（用户直觉"懒人一直在获取
-       前台的scene"）。若 root scene 绑定失败（bindScene=main scene），
-       动态把球窗口切到前台激活的 scene；切后台后自己进程无 active scene
-       则不动作（保留 root scene 方案为主，此为兜底）。 */
+    /* ★ v1.8.4 ② sceneFollowTimer(3s)：跟随当前前台 scene（用户直觉"懒人
+       一直在获取前台的scene"）。若 root scene 绑定失败（bindScene=main
+       scene），动态把球窗口切到前台激活的 scene；切后台后自己进程无 active
+       scene 则不动作（保留 root scene 方案为主，此为兜底）。 */
     self.sceneFollowTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer *t) {
         if (!self.floatingWindow) return;
         UIWindowScene *active = nil;
@@ -349,8 +320,6 @@
     self.touchTimer = nil;
     [self.hbTimer invalidate];
     self.hbTimer = nil;
-    [self.hiddenKeepTimer invalidate];
-    self.hiddenKeepTimer = nil;
     [self.sceneFollowTimer invalidate];
     self.sceneFollowTimer = nil;
     [self unregisterFromSpringBoard];

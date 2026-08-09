@@ -37,7 +37,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.19"
+#define ENGINE_VERSION "1.8.20"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -217,12 +217,10 @@ static void touch_evt_cb(void *target, void *refcon, void *sender, void *event) 
     double y = p_GetFloat(event, 0x10006);   /* kIOHIDEventFieldDigitizerY */
     if (x < 0 || y < 0) return;
 
-    /* 写共享文件：App 悬浮球轮询读取 */
-    FILE *tf = fopen("/tmp/ailintouch.touch", "w");
-    if (tf) {
-        fprintf(tf, "%.1f %.1f\n", x, y);
-        fclose(tf);
-    }
+    /* ★ v1.8.20 不再写 /tmp/ailintouch.touch —— App 已删除 pollTouchFile
+       轮询（v1.8.20 清理卡顿源）。引擎仍全局监听 HID（touch monitor
+       注册/心跳用途保留），球点击命中检测留待引擎侧方案。 */
+    (void)x; (void)y;
 }
 
 static int hid_init(void) {

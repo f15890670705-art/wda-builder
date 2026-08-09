@@ -430,9 +430,10 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [self pollEngineReady];
     }
 
-    /* ★ v1.8.11 降频 1s→5s：refreshStatus 每秒做 unix socket STATUS + 设备
-       信息收集（sysctl），用户铁证"手机发烫"——UI 状态刷新 5s 一次足够 */
-    [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *t) {
+    /* ★ v1.8.20 降频 5s→30s：refreshStatus 做 unix socket STATUS + 设备
+       信息收集（sysctl），用户铁证"手机特别卡"+ 明确说 5 秒获取没用 ——
+       UI 状态刷新 30s 一次足够 */
+    [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer *t) {
         [self refreshStatus];
     }];
     [self refreshStatus];
@@ -623,8 +624,8 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [self.keepAlivePlayer play];
         NSLog(@"[KeepAlive] player stopped, re-play");
     }
-    /* ★ v1.8.11 降频 3s→10s：检查播放状态不需要每 3 秒（发热源之一） */
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)),
+    /* ★ v1.8.20 降频 10s→30s：检查播放状态不需要太频繁（卡顿源之一） */
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         [self startKeepAliveWatchdog];
     });

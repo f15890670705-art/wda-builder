@@ -19,21 +19,25 @@
         circle.translatesAutoresizingMaskIntoConstraints = NO;
         circle.backgroundColor = [UIColor systemBlueColor];
         circle.layer.cornerRadius = self.bounds.size.width / 2;
+        /* ★ v1.8.20 阴影改极淡 + 静态 shadowPath：①黑圈消失（用户反馈）；
+           ②shadowPath 固定后阴影不再每帧重算，渲染开销大降（卡顿源之一） */
         circle.layer.shadowColor = [UIColor blackColor].CGColor;
-        circle.layer.shadowOpacity = 0.3;
-        circle.layer.shadowRadius = 4;
-        circle.layer.shadowOffset = CGSizeMake(0, 2);
+        circle.layer.shadowOpacity = 0.06;
+        circle.layer.shadowRadius = 1.5;
+        circle.layer.shadowOffset = CGSizeMake(0, 1);
+        circle.layer.shadowPath = [UIBezierPath bezierPathWithOvalInRect:
+            CGRectInset(self.bounds, 1, 1)].CGPath;
         circle.userInteractionEnabled = NO;
         [self addSubview:circle];
 
         /* ⚠️ 持续渲染保活：SpringBoard 托管的窗口 context 在【无渲染活动】时会被
-           系统回收 → 悬浮球消失（用户观察到"点击一下球就一直存在，不点击就消失"
-           正是触摸产生渲染活动 vs 无渲染的差别）。加一个无限循环的阴影呼吸动画，
-           让 CA 每帧持续活跃，context 不被回收。幅度极小，视觉不可察觉。 */
-        CABasicAnimation *breath = [CABasicAnimation animationWithKeyPath:@"shadowOpacity"];
-        breath.fromValue = @(0.25);
-        breath.toValue = @(0.45);
-        breath.duration = 1.6;
+           系统回收 → 悬浮球消失。★ v1.8.20 改用【透明度呼吸】（opacity 0.98↔1.0，
+           视觉不可察觉）替代【阴影呼吸】——阴影呼吸 = 黑圈 + 阴影每帧重算 = 卡顿。
+           透明度动画同样触发 CA 每帧渲染，保活效果不变。 */
+        CABasicAnimation *breath = [CABasicAnimation animationWithKeyPath:@"opacity"];
+        breath.fromValue = @(1.0);
+        breath.toValue = @(0.96);
+        breath.duration = 2.0;
         breath.autoreverses = YES;
         breath.repeatCount = INFINITY;
         [circle.layer addAnimation:breath forKey:@"breath"];

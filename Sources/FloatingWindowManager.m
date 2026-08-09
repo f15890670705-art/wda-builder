@@ -71,9 +71,7 @@
 @property (nonatomic, strong) id rootBinder;        /* ★ v1.6.1 UIRootWindowScenePresentationBinder 实例 */
 @property (nonatomic, assign) BOOL registered;
 @property (nonatomic, strong) FloatingBall *ball;
-@property (nonatomic, strong) NSTimer *touchTimer;
-@property (nonatomic, strong) NSTimer *hbTimer;      /* 心跳：定期重注册 + 上报 App 存活（诊断） */
-@property (nonatomic, strong) NSTimer *sceneFollowTimer; /* v1.8.4 1s 跟随前台 scene（v1.8.13 保留） */
+@property (nonatomic, strong) NSTimer *hbTimer;      /* v1.8.20 30s 心跳：只上报 hb-alive */
 @property (nonatomic, assign) unsigned int cachedCid;  /* 同一窗口 contextID 不变，拿到一次缓存复用 */
 @end
 
@@ -233,90 +231,35 @@
     /* 立即注册（若 contextID 尚未分配会失败，走 retry 补齐） */
     [self registerToSpringBoardWithRetry];
 
-    /* 触摸轮询：引擎(root)全局监听 HID 触摸，把坐标写 /tmp/ailintouch.touch，
-       App 每 50ms 读一次，命中球区域触发 onTap（懒人同款机制，后台也能点） */
-    self.touchTimer = [NSTimer scheduledTimerWithTimeInterval:0.15 repeats:YES block:^(NSTimer *t) {
-        [self pollTouchFile];
-    }];
+    /* ★ v1.8.20 删除触摸轮询（touchTimer 0.15s 读文件）——高频文件 I/O
+       卡顿源之一，且用户早已指出该方案不行。球点击保留前台 tap 手势，
+       后台点击留待引擎侧命中检测方案。 */
 
-    /* ★ v1.5.6: 心跳每 5 秒【幂等重注册】，绝不 rebuild！
-       v1.5.5 心跳每 5 秒 rebuild → 窗口每 5 秒销毁重建 → 球闪烁 + 刚注册成功
-       就被打断（用户实测"几秒闪一下"）。
-       SBS register 是幂等的（重复注册同一 contextID 无副作用），心跳持续
-       register 保持托管即可；rebuild 只在 applicationDidBecomeActive 回前台时
-       做一次（拿全新 contextID，v1.5.5 保留）。 */
-    /* ★ v1.7.0 心跳恢复注册：每 5 秒幂等 re-register。
-       v1.6.7 学懒人"只注册一次"去掉了注册 —— 但懒人 daemon 的 cid 永不变，
-       我们前台 App 进后台 WindowServer 会回收/更换 contextID（用户铁证：
-       第一次装球全局 → App 进后台 → 永远内部）。windowContextID 每次重新取
-       新值，心跳注册会自动用新 cid（cid 没变则重复注册同一 cid 幂等无害）。 */
-    self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:15.0 repeats:YES block:^(NSTimer *t) {
+    /* ★ v1.8.20 心跳简化：30s 一次，只上报 hb-alive，【不再做 SBS 注册】。
+       SBS 注册交给 applicationDidBecomeActive（回前台时 cid 稳定后注册一次），
+       心跳重复注册是浪费（v1.8.12 实测每次取 cid 都不同=注册也白注册）。 */
+    self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer *t) {
         [self reportToEngine:@"hb-alive"];
-        if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
-        [self registerToSpringBoardWithRetry];
     }];
 
     /* ★ v1.8.13 删除 hiddenKeepTimer：v1.8.12 实测 reg-ok 的 contextID 每
        15 秒心跳都在变（2874493361→279838510→709162564→2901182776→92634869）
        —— 强烈怀疑 hiddenKeepTimer 反复 setHidden:NO 与系统强压互相拉扯，
        导致窗口反复 attach/detach → contextID 每轮重分配 → SBS 托管不稳。
-       删掉它，依赖 hbTimer(15s) 幂等重注册 + applicationDidBecomeActive 重注册。
+       删掉它，依赖 applicationDidBecomeActive 重注册。
        （若切后台球消失，说明问题在 scene 激活状态，setHidden 强顶无效，
        保留它只会让 cid 一直抖。） */
 
-    /* ★ v1.8.4 ② sceneFollowTimer(3s)：跟随当前前台 scene（用户直觉"懒人
-       一直在获取前台的scene"）。若 root scene 绑定失败（bindScene=main
-       scene），动态把球窗口切到前台激活的 scene；切后台后自己进程无 active
-       scene 则不动作（保留 root scene 方案为主，此为兜底）。 */
-    self.sceneFollowTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer *t) {
-        if (!self.floatingWindow) return;
-        UIWindowScene *active = nil;
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if ([s isKindOfClass:[UIWindowScene class]] &&
-                s.activationState == UISceneActivationStateForegroundActive) {
-                active = (UIWindowScene *)s;
-                break;
-            }
-        }
-        if (active && self.floatingWindow.windowScene != active) {
-            self.floatingWindow.windowScene = active;
-            [self reportToEngine:@"scene-follow"];
-        }
-    }];
-    [[NSRunLoop mainRunLoop] addTimer:self.sceneFollowTimer forMode:NSRunLoopCommonModes];
+    /* ★ v1.8.20 删除 sceneFollowTimer（3s 遍历 connectedScenes）——高频枚举
+       卡顿源之一；root scene 拿不到（iOS15+），跟随前台 scene 效果有限。 */
 
     [self reportToEngine:@"ball-shown"];
 }
 
-- (void)pollTouchFile {
-    if (!self.floatingWindow || !self.ball) return;
-    NSString *path = @"/tmp/ailintouch.touch";
-    NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-    if (!content || content.length == 0) return;
-    /* 读完即删，防止重复触发 */
-    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
-
-    float x = 0, y = 0;
-    if (sscanf(content.UTF8String, "%f %f", &x, &y) != 2) return;
-
-    /* 球的屏幕坐标 = 窗口 origin + ball.origin（窗口 56×56 = 球的位置） */
-    CGPoint ballOrigin = CGPointMake(self.floatingWindow.frame.origin.x + self.ball.frame.origin.x,
-                                     self.floatingWindow.frame.origin.y + self.ball.frame.origin.y);
-    CGRect ballFrame = CGRectMake(ballOrigin.x, ballOrigin.y,
-                                  self.ball.bounds.size.width, self.ball.bounds.size.height);
-    if (CGRectContainsPoint(ballFrame, CGPointMake(x, y))) {
-        if (self.onTap) self.onTap();
-    }
-}
-
 - (void)hideFloatingBall {
     if (!self.floatingWindow) return;
-    [self.touchTimer invalidate];
-    self.touchTimer = nil;
     [self.hbTimer invalidate];
     self.hbTimer = nil;
-    [self.sceneFollowTimer invalidate];
-    self.sceneFollowTimer = nil;
     [self unregisterFromSpringBoard];
     self.floatingWindow.hidden = YES;
     self.floatingWindow = nil;
@@ -417,6 +360,10 @@
    只要求类型是 NSNumber 且非 0。 */
 - (unsigned int)windowContextID {
     if (!self.floatingWindow) return 0;
+    /* ★ v1.8.20 缓存优先：同一窗口 contextID 不变（v1.7.0 已加 cachedCid），
+       拿到一次就复用，不再每次 NSInvocation 动态调用（高频取 cid 也是
+       卡顿源之一）。窗口重建时 cachedCid 已清 0。 */
+    if (self.cachedCid != 0) return self.cachedCid;
     /* 依次尝试多个方法名（懒人同款）：_contextId → contextId */
     NSArray *sels = @[@"_contextId", @"contextId"];
     for (NSString *selName in sels) {
@@ -571,7 +518,6 @@
     [self reportToEngine:@"rebuild"];
     UIWindowScene *scene = (UIWindowScene *)[[[UIApplication sharedApplication] connectedScenes] anyObject];
     self.cachedCid = 0;   /* 新窗口新 contextID，清缓存 */
-    [self.touchTimer invalidate]; self.touchTimer = nil;
     [self.hbTimer invalidate]; self.hbTimer = nil;
     [self unregisterFromSpringBoard];
     self.floatingWindow.hidden = YES;

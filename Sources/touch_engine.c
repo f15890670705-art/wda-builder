@@ -38,7 +38,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.51"
+#define ENGINE_VERSION "1.8.52"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {

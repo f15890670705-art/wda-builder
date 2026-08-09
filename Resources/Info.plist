@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.8.58</string>
+	<string>1.8.59</string>
 	<key>CFBundleVersion</key>
-	<string>1.8.58</string>
+	<string>1.8.59</string>
 	<key>CFBundleSupportedPlatforms</key>
 	<array>
 		<string>iPhoneOS</string>
@@ -94,22 +94,13 @@
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
 
-	<!-- ========== 后台常驻（懒人同款：daemon 化，launchd 管，iOS 不杀） ========== -->
-	<key>SBAppIsDaemon</key>
-	<true/>
-	<key>HideAtLaunch</key>
-	<true/>
-	<key>SpringBoard</key>
-	<dict>
-		<key>Hide</key>
-		<true/>
-		<key>Background</key>
-		<true/>
-		<key>LaunchAtBoot</key>
-		<true/>
-		<key>RestartAfterCrash</key>
-		<true/>
-	</dict>
+	<!-- ★ v1.8.59 删除 daemon 化残留（黑屏根因）：
+	     SBAppIsDaemon=true + HideAtLaunch=true + SpringBoard.Hide=true
+	     是 v1.8.40 前后 daemon 化实验遗留 —— SpringBoard 把这个 app 当 daemon
+	     处理、启动即隐藏窗口 → v1.8.58 legacy 化后直接黑屏（scene-based 时
+	     靠 scene 激活强制显示勉强盖住）。开源 Letterpress（TrollStore 全局
+	     悬浮球正版参考）是正常 app，无任何 daemon 配置。删除后 app 回归
+	     正常前台 app：窗口正常显示 + legacy 球窗口 SBS 注册全局。 -->
 
 	<!-- ★ v1.5.2 铁证：懒人(RootService) 的 BSServiceDomains 结构（照原样抄）——
 	     DerivedServiceRestrictions 是数组（字符串列表），Services 的值是空 dict {}。

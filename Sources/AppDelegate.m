@@ -468,6 +468,15 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     signal(SIGSEGV, signal_crash_handler);
     signal(SIGBUS, signal_crash_handler);
 
+    /* ★ v1.8.59 修复通知顺序 bug：必须先注册观察者，再发 sceneReady 通知！
+       v1.8.58 的 buildMainWindow 先 postNotificationName（同步分发），
+       addObserver 在后面 → 通知白发，sceneReady: 永不执行 → 球永远不建
+       （日志铁证：legacy-main-window-ok 后无 phase-3 scene-ready）。 */
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(sceneReady:)
+                                                 name:@"AilinTouchSceneReady"
+                                               object:nil];
+
     /* ★ v1.8.58 legacy 模式（无 SceneManifest）：主窗口由 AppDelegate 直接建
        （照开源 Letterpress：正规 app + legacy，悬浮球窗口不绑 scene 才能
        SBS 注册 → 切后台全局）。AilinTouchSceneDelegate 不再被调用。 */
@@ -481,13 +490,6 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     /* 后台保活（懒人同款）：audio session + 循环静音 → App 退后台不挂起 */
     [self startBackgroundAudioKeepAlive];
 
-    /* ★ iOS 13+ scene 生命周期（AutoGo floatball 同架构）：窗口由
-       AilinTouchSceneDelegate 在 scene:willConnect 创建，这里监听它的通知接住 UI */
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(sceneReady:)
-                                                 name:@"AilinTouchSceneReady"
-                                               object:nil];
-
     /* 阶段1: 拉起引擎（若上次手动停止过，尊重用户选择：不自动拉起） */
     if ([[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED]) {
         [self appTrace:@"phase-1 engine-stopped-marker, stay down"];
@@ -498,10 +500,13 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [self pollEngineReady];
     }
 
-    /* ★ v1.8.44 拉起 AilinHUD 独立进程（root persona）：scene-based
-       UIApplicationMain → HUDSceneDelegate willConnect 建球 + SBS 注册全局。
-       独立进程球不随主 App scene 生命周期 —— 切后台不消失（懒人 RootCore 同款）。 */
-    [self spawnHudBootrun];
+    /* ★ v1.8.59 不再拉起 HUD 独立进程！
+       v1.8.44-57 的 HUD 路线已证明死路：spawn 独立进程 UIApplicationMain
+       不稳定（v1.8.46/47 能进 appdelegate，v1.8.49+ 卡 ui-main-start，
+       19:06:35 实测又卡）+ createScene 全验证失败（非 daemon 进程
+       FrontBoard 不响应/trap）+ arm64 主 App spawn 不了 arm64e HUD。
+       主 App 已 legacy 化（v1.8.58 删 SceneManifest），球在主 App 进程内
+       建（Letterpress 正路），HUD 彻底退役。 */
 
     /* ★ v1.8.21 状态刷新改为【事件驱动】，删除 30s 定时轮询（用户建议：
        引擎关闭了就刷新一下，为什么非要自动刷新）。

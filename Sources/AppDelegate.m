@@ -126,6 +126,9 @@ static void signal_crash_handler(int sig) {
     [self appTrace:[NSString stringWithFormat:@"foreground ver=%@",
         [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"]]];
 
+    /* ★ v1.8.22 回前台：球窗口绑回 scene（切后台时 detachBallFromScene 脱离的）*/
+    [[FloatingWindowManager shared] attachBallToScene];
+
     [[FloatingWindowManager shared] setWindowVisible:YES];
     /* ★ v1.7.0 关键修复：回前台必须【重新注册 SBS】！
        用户铁证："第一次安装球全局 → App 任何方式进后台 → 永远变内部球"。
@@ -147,7 +150,11 @@ static void signal_crash_handler(int sig) {
    运行、无前台态），该分支实际从不执行。我们是前台 App，切后台必然触发，
    绝不能隐藏窗口 —— SBS 托管要靠窗口画面持续存在，切后台只留心跳即可。 */
 - (void)applicationDidEnterBackground:(UIApplication *)application {
-    /* no-op：不隐藏窗口，SBS 托管的球继续全局显示 */
+    /* ★ v1.8.22 切后台让球窗口【脱离 scene】：不隐藏窗口没用（系统在 scene
+       不激活时强制隐藏，用户实测：切后台球从全局变 App 内）。
+       脱离 scene 后窗口不随 scene 隐藏，保留 contextID + SBS 托管 → 球继续全局。
+       回前台 applicationDidBecomeActive 绑回 scene。 */
+    [[FloatingWindowManager shared] detachBallFromScene];
 }
 
 #pragma mark root spawn

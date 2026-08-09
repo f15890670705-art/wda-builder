@@ -73,6 +73,7 @@
 @property (nonatomic, strong) FloatingBall *ball;
 @property (nonatomic, strong) NSTimer *hbTimer;      /* v1.8.20 30s 心跳：只上报 hb-alive */
 @property (nonatomic, assign) unsigned int cachedCid;  /* 同一窗口 contextID 不变，拿到一次缓存复用 */
+@property (nonatomic, strong) UIWindowScene *detachedScene; /* v1.8.22 切后台脱离的 scene（回前台绑回） */
 @end
 
 @implementation FloatingWindowManager
@@ -264,6 +265,30 @@
     self.floatingWindow.hidden = YES;
     self.floatingWindow = nil;
     self.ball = nil;
+    self.detachedScene = nil;
+}
+
+/* ★ v1.8.22 切后台：球窗口【脱离 scene】（windowScene=nil）。
+   用户实测铁证：App 完全重启创建全局球，前台一直全局；一切后台就变 App 内
+   —— 因为窗口绑 scene，scene 不激活 → 系统强制隐藏窗口 → SBS 托管失效。
+   脱离 scene 后窗口不随 scene 隐藏，保留已分配的 contextID + SBS 托管
+   → 球继续全局显示。回前台 attachBallToScene 绑回。 */
+- (void)detachBallFromScene {
+    if (!self.floatingWindow) return;
+    if (self.floatingWindow.windowScene) {
+        self.detachedScene = self.floatingWindow.windowScene;
+        self.floatingWindow.windowScene = nil;
+        [self reportToEngine:@"ball-detach-scene"];
+    }
+}
+
+- (void)attachBallToScene {
+    if (!self.floatingWindow) return;
+    if (self.detachedScene && !self.floatingWindow.windowScene) {
+        self.floatingWindow.windowScene = self.detachedScene;
+        self.detachedScene = nil;
+        [self reportToEngine:@"ball-attach-scene"];
+    }
 }
 
 /* ★ v1.6.1: UIRootWindowScenePresentationBinder 绑定（懒人/AutoGo 反汇编铁证）。

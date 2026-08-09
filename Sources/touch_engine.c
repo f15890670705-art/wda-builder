@@ -38,7 +38,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.34"
+#define ENGINE_VERSION "1.8.35"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -623,23 +623,107 @@ static void kill_old_instance(void) {
     if (wf) { fprintf(wf, "%d", getpid()); fclose(wf); }
 }
 
+/* ★ v1.8.35 通用复制文件（拷 AilinHUD 副本用） */
+static int copy_file(const char *src, const char *dst);
+
 /* 复制自身到固定路径 */
 static int copy_self(const char *dst) {
     char self[1024] = {0};
     uint32_t sz = sizeof(self);
     _NSGetExecutablePath(self, &sz);
     if (strcmp(self, dst) == 0) return 0;
+    return copy_file(self, dst);
+}
 
-    FILE *in = fopen(self, "rb");
-    if (!in) { LOG("open self failed: %s", self); return -1; }
+/* ★ v1.8.35 通用复制文件（拷 AilinHUD 副本用） */
+static int copy_file(const char *src, const char *dst) {
+    FILE *in = fopen(src, "rb");
+    if (!in) { LOG("open src failed: %s", src); return -1; }
     FILE *out = fopen(dst, "wb");
     if (!out) { fclose(in); LOG("open dst failed: %s", dst); return -1; }
     char buf[8192]; size_t n;
     while ((n = fread(buf, 1, sizeof(buf), in)) > 0) fwrite(buf, 1, n, out);
     fclose(in); fclose(out);
     chmod(dst, 0755);
-    LOG("copied self -> %s", dst);
+    LOG("copied %s -> %s", src, dst);
     return 0;
+}
+
+/* ★ v1.8.35 拷 AilinHUD（App bundle 内 AilinHUD.app/AilinHUD）→ /var/mobile/ailintouch_hud */
+static void copy_hud_to_install(void) {
+    char self[1024] = {0};
+    uint32_t sz = sizeof(self);
+    _NSGetExecutablePath(self, &sz);
+    char *slash = strrchr(self, '/');
+    if (!slash) return;
+    char hud_src[1024];
+    snprintf(hud_src, sizeof(hud_src), "%.*s/AilinHUD.app/AilinHUD", (int)(slash - self), self);
+    if (access(hud_src, X_OK) != 0) {
+        char fb[1024];
+        snprintf(fb, sizeof(fb), "%.*s/AilinHUD", (int)(slash - self), self);
+        if (access(fb, X_OK) == 0) snprintf(hud_src, sizeof(hud_src), "%s", fb);
+        else { LOG("AilinHUD binary missing: %s", hud_src); return; }
+    }
+    copy_file(hud_src, "/var/mobile/ailintouch_hud");
+}
+
+/* ★ v1.8.35 写 launchd daemon plist（懒人方式核心）：
+   写到 /Library/LaunchDaemons → 重启手机 launchd 开机自动加载（懒人
+   mqlaunchd 就是靠 plist 在 /Library/LaunchDaemons 才活的）——
+   【不需要 launchctl/launch_msg】！launch_msg 卡死、launchctl arm64e
+   exec 失败的坑全部绕开。 */
+static int write_daemon_plist(const char *path, const char *label,
+                              const char *prog, const char *extra_args) {
+    FILE *pf = fopen(path, "w");
+    if (!pf) {
+        LOG("cannot write %s: %s", path, strerror(errno));
+        return -1;
+    }
+    fprintf(pf,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+        "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+        "<plist version=\"1.0\">\n<dict>\n"
+        "\t<key>Label</key>\n\t<string>%s</string>\n"
+        "\t<key>ProgramArguments</key>\n\t<array>\n"
+        "\t\t<string>%s</string>\n"
+        "%s"
+        "\t</array>\n"
+        "\t<key>RunAtLoad</key>\n\t<true/>\n"
+        "\t<key>KeepAlive</key>\n\t<true/>\n"
+        "\t<key>UserName</key>\n\t<string>root</string>\n"
+        "\t<key>EnvironmentVariables</key>\n\t<dict>\n"
+        "\t\t<key>PATH</key>\n\t\t<string>/usr/bin:/bin:/usr/sbin:/sbin</string>\n"
+        "\t</dict>\n"
+        "</dict>\n</plist>\n",
+        label, prog, extra_args ? extra_args : "");
+    fclose(pf);
+    LOG("wrote %s", path);
+    return 0;
+}
+
+/* v1.8.35 懒人方式 ensure_launchd：plist 写 /Library/LaunchDaemons，
+   重启手机 launchd 自动加载（不做任何手动 launchctl/launch_msg） */
+static int ensure_launchd(void) {
+    if (copy_self(INSTALL_PATH) != 0) return -1;
+    copy_hud_to_install();  /* AilinHUD → /var/mobile/ailintouch_hud */
+
+    /* AilinHUD daemon plist（主目标：系统身份拉起 AilinHUD → UIApplicationMain
+       不卡 → didFinish 建球 → SBS 注册全局。ProgramArguments 带 bootrun，
+       main 里 bootrun 分支调 UIApplicationMain） */
+    int rc_hud = write_daemon_plist(
+        "/Library/LaunchDaemons/com.ailintouch.hud.plist",
+        "com.ailintouch.hud",
+        "/var/mobile/ailintouch_hud",
+        "\t\t<string>bootrun</string>\n");
+
+    /* 引擎 daemon plist（顺带：引擎也开机自启） */
+    int rc_eng = write_daemon_plist(
+        LAUNCHD_PLIST, LAUNCHD_LABEL, INSTALL_PATH, NULL);
+
+    LOG("daemon plists: hud rc=%d eng rc=%d — REBOOT 手机后 launchd 自动以系统身份拉起 (懒人方式)",
+        rc_hud, rc_eng);
+    return (rc_hud == 0) ? 0 : -1;
 }
 
 /* ---------- 独立悬浮球进程 AilinHUD（懒人模式核心） ----------
@@ -735,69 +819,8 @@ extern launch_data_t launch_data_new_string(const char *);
 extern launch_data_t launch_data_new_bool(int);
 #define LAUNCH_DATA_DICTIONARY 3
 
-/* v1.8.24: launchd 方案小步验证中暂不调用（v1.8.23 竞态导致 8080 不稳定已回滚），保留参考 */
-__attribute__((unused))
-static int ensure_launchd(void) {
-    if (copy_self(INSTALL_PATH) != 0) return -1;
-
-    /* ★ v1.8.17 首选 launch_msg 提交系统 daemon job（root 常驻 KeepAlive）。
-       launchctl bootstrap 因 arm64e exec 失败（v1.8.15 实测 Bad executable）。
-       ★ 修复：必须带 label（launch_msg 老协议要求 label，缺了 job 不注册
-       → handoff 退出后 launchd 无 job 可拉起 → 引擎彻底消失 8080 拒连！） */
-    launch_data_t msg = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
-    if (msg) {
-        launch_data_dict_insert(msg, launch_data_new_string(LAUNCHD_LABEL), "label");
-        launch_data_dict_insert(msg, launch_data_new_string(INSTALL_PATH), "program");
-        launch_data_dict_insert(msg, launch_data_new_bool(1), "run_at_load");
-        launch_data_dict_insert(msg, launch_data_new_bool(1), "keep_alive");
-        launch_data_t resp = launch_msg(msg);
-        if (resp) {
-            LOG("launch_msg submit ok (daemon installed)");
-            launch_data_free(resp);
-            return 0;
-        }
-        LOG("launch_msg failed, fallback exec launchctl");
-    }
-
-    /* 写 plist 到 /var/mobile（引擎可写），再用 launchctl（arm64e 可能失败） */
-    char plist_path[512];
-    snprintf(plist_path, sizeof(plist_path), "/var/mobile/%s.plist", LAUNCHD_LABEL);
-    FILE *pf = fopen(plist_path, "w");
-    if (!pf) { LOG("cannot write %s: %s", plist_path, strerror(errno)); return -1; }
-    fprintf(pf,
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
-        "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
-        "<plist version=\"1.0\">\n<dict>\n"
-        "\t<key>Label</key>\n\t<string>%s</string>\n"
-        "\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>%s</string>\n\t</array>\n"
-        "\t<key>RunAtLoad</key>\n\t<true/>\n"
-        "\t<key>KeepAlive</key>\n\t<true/>\n"
-        "\t<key>UserName</key>\n\t<string>root</string>\n"
-        "\t<key>EnvironmentVariables</key>\n\t<dict>\n"
-        "\t\t<key>PATH</key>\n\t\t<string>/usr/bin:/bin:/usr/sbin:/sbin</string>\n"
-        "\t</dict>\n"
-        "</dict>\n</plist>\n", LAUNCHD_LABEL, INSTALL_PATH);
-    fclose(pf);
-    LOG("wrote %s", plist_path);
-
-    /* launchctl bootstrap system（plist 任意路径）；老系统 fallback load -w */
-    pid_t pid;
-    char *argv[] = {"launchctl", "bootstrap", "system", plist_path, NULL};
-    int rc = posix_spawn(&pid, "/bin/launchctl", NULL, NULL, argv, environ);
-    if (rc != 0) {
-        LOG("launchctl bootstrap spawn failed: %s", strerror(rc));
-        char *argv2[] = {"launchctl", "load", "-w", plist_path, NULL};
-        rc = posix_spawn(&pid, "/bin/launchctl", NULL, NULL, argv2, environ);
-        if (rc != 0) { LOG("launchctl load spawn failed: %s", strerror(rc)); return -1; }
-    }
-    int st = 0;
-    waitpid(pid, &st, 0);
-    int erc = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
-    LOG("launchctl bootstrap rc=%d", erc);
-    return 0;
-}
-
+/* v1.8.35 懒人方式 ensure_launchd：见上方定义（plist 写 /Library/LaunchDaemons
+   重启自动加载，无 launch_msg/launchctl） */
 int main(int argc, char *argv[]) {
     open_log();  /* 数据区日志，sandbox 实例降级 /tmp */
     LOG("touch_engine v%s start uid=%d ppid=%d", ENGINE_VERSION, getuid(), getppid());
@@ -808,11 +831,16 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    /* ★ v1.8.24 回滚 launch_msg handoff（v1.8.23 实测 8080 又废）：
-       launch_msg 加 label 后真的提交成功了，但 launchd 副本与手动实例
-       竞争 + KeepAlive 循环导致 8080 不稳定。launchd 系统 daemon 方案
-       必须小步验证逐步推进，先恢复 v1.8.19 简单可靠模式（App spawn
-       直接跑），引擎绝不消失。 */
+    /* ★ v1.8.35 懒人方式：写 daemon plist 到 /Library/LaunchDaemons（HUD + 引擎），
+       重启手机后 launchd 开机自动加载 → AilinHUD 以【系统身份】拉起 →
+       UIApplicationMain 不卡 → didFinish 建球 → SBS 注册全局。
+       不手动 launchctl/launch_msg（那些路全卡过）。 */
+    if (getuid() == 0) {
+        ensure_launchd();
+    } else {
+        LOG("not root (uid=%d), skip daemon plist install", getuid());
+    }
+
     kill_old_instance();  /* 清旧实例（每次 App 打开都换新引擎，保证版本更新） */
 
     if (hid_init() != 0) { LOG("hid_init failed"); return 1; }

@@ -120,6 +120,12 @@ static void signal_crash_handler(int sig) {
    切后台 SpringBoard 不会销毁 SBS 托管，setHidden:NO 就能恢复显示。
    回前台只 setHidden:NO 即可，跟懒人完全一致。 */
 - (void)applicationDidBecomeActive:(UIApplication *)application {
+    /* ★ v1.8.9 每次前台都打点（含版本号）：不依赖 didFinish——旧进程被前台化
+       不会重走启动流水，用户"启动了app日志也不显示"的根因排查。
+       /tmp/ailintouch_app.log 是追加式，每次前台化都能看到时间戳。 */
+    [self appTrace:[NSString stringWithFormat:@"foreground ver=%@",
+        [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"]]];
+
     [[FloatingWindowManager shared] setWindowVisible:YES];
     /* ★ v1.7.0 关键修复：回前台必须【重新注册 SBS】！
        用户铁证："第一次安装球全局 → App 任何方式进后台 → 永远变内部球"。

@@ -97,24 +97,25 @@ int main(int argc, char *argv[]) {
     @autoreleasepool {
         signal(SIGPIPE, SIG_IGN);
         hud_mark(@"booting");
-        /* ★ v1.8.37 bootrun 模式：手动建球 + CFRunLoopRun 驱动渲染。
-           v1.8.36 实测：manualInstallBall 后调 UIApplicationMain —— SBS 注册
-           成功（registered-cid）但球不显示 = 窗口没渲染（UIApplicationMain
-           卡在 scene 连接，runloop 没正常转，UIWindow 内容画不上去）。
-           ★ 修复：不调 UIApplicationMain，直接 CFRunLoopRun() —— runloop
-           正常转，CoreAnimation 驱动窗口渲染，球显示。 */
+        /* ★ v1.8.44 照懒人 RootCore 铁证重写 bootrun：不再 CFRunLoopRun 裸跑。
+           v1.8.36/1.8.37 的 legacy 裸跑（无 UIApplicationMain + 无 SceneManifest）
+           实测 registered-cid 但球不渲染 —— 因为进程没有 UIKit scene 基础设施，
+           UIWindow 没有 scene 可绑 → 拿不到有效 WindowServer contextID。
+           懒人 RootCore = 完整 scene-based（Info.plist 有 UIApplicationSceneManifest
+           + SceneDelegate），UIApplicationMain 后 UIKit 建 scene → scene:willConnect
+           （HUDSceneDelegate）里窗口 initWithWindowScene: 绑 scene → 渲染 + SBS 注册。
+           bootrun 参数保留（引擎/主 App 拉起时传），行为 = 正常 UIApplicationMain。 */
         if (argc >= 2 && strcmp(argv[1], "bootrun") == 0) {
             hud_mark(@"ui-main-start");
             /* 后台线程尝试 launchd（TrollStore 下会失败，无害） */
             pthread_t lt;
             pthread_create(&lt, NULL, hud_launchd_thread, NULL);
-            /* 先手动建球（窗口 + 球 + FBScene/binder + SBS 注册） */
-            [HUDAppDelegate manualInstallBall];
-            hud_mark(@"runloop-start");
-            /* ★ runloop 驱动渲染（不调 UIApplicationMain，绕开 scene 卡死） */
-            CFRunLoopRun();
-            hud_mark(@"runloop-exited");
-            return 0;
+            /* ★ scene-based UIApplicationMain：SceneManifest + HUDSceneDelegate，
+               窗口在 willConnect 里绑 scene 创建（照懒人 RootCore） */
+            int rc = UIApplicationMain(argc, argv, nil,
+                NSStringFromClass([HUDAppDelegate class]));
+            hud_mark([NSString stringWithFormat:@"exited-%d", rc]);
+            return rc;
         }
         int rc = UIApplicationMain(argc, argv, nil,
             NSStringFromClass([HUDAppDelegate class]));

@@ -1,12 +1,14 @@
 //
 // HUDSceneDelegate.m
 //
-// AilinHUD Scene 生命周期实现（照懒人 RootCore 反汇编铁证 v1.8.0）。
-// 懒人 RootCore（com.nx.RootCore）符号铁证：@_UIApplicationMain +
-// @_OBJC_CLASS_$_FBSceneManager + FBSMutableSceneDefinition +
-// createSceneWithDefinition:initialParameters: + UIRootWindowScenePresentationBinder。
-// 悬浮球 = 窗口不绑 UIKit scene + 【手动创建二进制 FBScene】+
-// binder addScene 绑到系统 root window 层 → 全局显示、不随 App scene 挂起。
+// AilinHUD Scene 生命周期实现（照懒人 RootCore 真实 Info.plist + 符号铁证 v1.8.44）。
+// 懒人 RootCore（com.nx.RootCore）：完整 UIApplicationSceneManifest + SceneDelegate
+// + @_OBJC_CLASS_$_UIWindowScene + UIRootSceneWindow + UIRootWindowScenePresentationBinder
+// + FBSceneManager + SBSAccessibilityWindowHostingController。
+// ★ v1.8.44 关键修正（照懒人铁证）：窗口必须 initWithWindowScene: 绑 UIKit scene ——
+//   v1.8.0-1.8.37 的"不绑 scene 裸窗口 + 二进制 FBScene"路线实测球不渲染/不全局
+//   （registered-cid 但球不显示）。scene-based 下窗口有 scene → 有效 contextID →
+//   SBS 注册全局。FBScene/binder 保留作为补路。
 //
 #import "HUDSceneDelegate.h"
 #import "HUDBall.h"
@@ -25,10 +27,17 @@ static void hud_mark(NSString *msg) {
 
     hud_mark(@"scene-willconnect");
 
-    /* ★ v1.8.0 照懒人 MyCustomWindow：窗口 initWithFrame 全屏，不绑 UIKit scene。
-       懒人 RootCore 的悬浮球窗口独立于 UIKit scene，由二进制 FBScene + binder
-       挂到系统 root window 层显示。 */
-    self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    if (![scene isKindOfClass:[UIWindowScene class]]) {
+        hud_mark(@"scene-not-windowscene");
+        return;
+    }
+    UIWindowScene *windowScene = (UIWindowScene *)scene;
+
+    /* ★ v1.8.44 照懒人 MyCustomWindow = initWithWindowScene:（scene:willConnect
+       反汇编 0x10001d0d8 铁证）：窗口绑 scene 才能拿到有效 WindowServer
+       contextID + 内容渲染。v1.8.36 的 initWithFrame 裸窗口（无 scene）实测
+       registered-cid 但球不渲染 = cid 是垃圾大数。 */
+    self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
     self.window.backgroundColor = [UIColor clearColor];
     self.window.windowLevel = 20000002.0;
 
@@ -36,10 +45,10 @@ static void hud_mark(NSString *msg) {
     vc.view.backgroundColor = [UIColor clearColor];
     self.window.rootViewController = vc;
 
-    /* 悬浮球 */
+    /* 悬浮球（位置靠右，与主 App 球区分，便于验证双进程） */
     CGFloat size = 56;
-    CGFloat x = 20;
-    CGFloat y = [UIScreen mainScreen].bounds.size.height / 2 - size;
+    CGFloat x = windowScene.coordinateSpace.bounds.size.width - 20 - size;
+    CGFloat y = windowScene.coordinateSpace.bounds.size.height / 2 - size;
     HUDBall *ball = [[HUDBall alloc] initWithFrame:CGRectMake(x, y, size, size)];
     [vc.view addSubview:ball];
 
@@ -47,10 +56,11 @@ static void hud_mark(NSString *msg) {
     hud_mark(@"window-shown");
 
     /* ★ v1.8.0 二进制 FBScene：FBSceneManager 手动创建 + binder 绑系统 root window。
-       懒人 RootCore 符号铁证。createSceneWithDefinition:initialParameters: */
+       懒人 RootCore 符号铁证。createSceneWithDefinition:initialParameters:
+       v1.8.44 保留（补路）：scene-based 主路走通时它无害，失败时不影响窗口。 */
     [self createFrontBoardScene];
 
-    /* SBS 注册 → 全局悬浮 */
+    /* SBS 注册 → 全局悬浮（cid 可能延迟分配，内部重试） */
     [self registerToSpringBoard];
 }
 
@@ -75,28 +85,35 @@ static void hud_mark(NSString *msg) {
         if (!defCls) { hud_mark(@"fb-def-missing"); return; }
         id def = ((id(*)(id, SEL))objc_msgSend)(defCls, NSSelectorFromString(@"new"));
 
-        /* 3. identity：FBSMutableSceneIdentity initWithBundleIdentifier: */
-        Class identCls = NSClassFromString(@"FBSMutableSceneIdentity");
-        if (identCls) {
-            SEL initSel = NSSelectorFromString(@"initWithBundleIdentifier:");
-            id identity = ((id(*)(id, SEL, id))objc_msgSend)(
-                ((id(*)(id, SEL))objc_msgSend)(identCls, NSSelectorFromString(@"alloc")),
-                initSel, [[NSBundle mainBundle] bundleIdentifier]);
-            if (identity) {
-                ((void(*)(id, SEL, id))objc_msgSend)(def, NSSelectorFromString(@"setIdentity:"), identity);
-            }
-        }
+        /* 3. identity —— ★ v1.8.42 铁证不再设置！
+           v1.8.39 实测 FBSMutableSceneIdentity init 全抛异常，设置失败后 def
+           不干净 → createSceneWithDefinition 卡死。agoverlayd 符号里没有任何
+           identity selector = 它根本不设 identity，def 用 new 的干净对象。 */
 
         /* 4. FBSMutableSceneParameters */
         Class paramsCls = NSClassFromString(@"FBSMutableSceneParameters");
         id params = paramsCls ? ((id(*)(id, SEL))objc_msgSend)(paramsCls, NSSelectorFromString(@"new")) : nil;
         if (!params) { hud_mark(@"fb-params-fail"); return; }
 
-        /* 5. createSceneWithDefinition:initialParameters: */
+        /* 5. createSceneWithDefinition:initialParameters:（★ v1.8.42 后台线程 +
+           3s 超时，不阻塞主线程 —— v1.8.39 实测 createScene 可能同步卡死） */
+        __block id fbSceneBlock = nil;
+        __block BOOL createDone = NO;
         SEL createSel = NSSelectorFromString(@"createSceneWithDefinition:initialParameters:");
         if (![manager respondsToSelector:createSel]) { hud_mark(@"fb-create-no-sel"); return; }
-        id fbScene = ((id(*)(id, SEL, id, id))objc_msgSend)(manager, createSel, def, params);
-        if (!fbScene) { hud_mark(@"fb-create-fail"); return; }
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            @try {
+                fbSceneBlock = ((id(*)(id, SEL, id, id))objc_msgSend)(manager, createSel, def, params);
+            } @catch (NSException *e) {
+                hud_mark([NSString stringWithFormat:@"fb-create-ex-%@", e.name]);
+            }
+            createDone = YES;
+        });
+        for (int i = 0; i < 30 && !createDone; i++) usleep(100 * 1000);
+        id fbScene = fbSceneBlock;
+        hud_mark(createDone ? (fbScene ? @"fb-scene-created" : @"fb-create-returned-nil")
+                            : @"fb-create-timeout-3s");
+        if (!fbScene) return;
         self.fbScene = fbScene;
         hud_mark(@"fb-scene-created");
 

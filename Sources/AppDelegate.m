@@ -205,9 +205,11 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     return pid;
 }
 
-/* ★ v1.8.25 用户指示：先在 AilinHUD 搞 HTTP server 日志跑通，再管引擎。
-   主 App 拉起 AilinHUD（bootrun 模式 = 纯 HTTP server 8081，不调
-   UIApplicationMain 不卡）。路径：嵌套在主 bundle 的 AilinHUD.app/AilinHUD。 */
+/* ★ v1.8.44 拉起 AilinHUD（scene-based UIApplicationMain 建球，照懒人 RootCore）：
+   RootCore 是被主 App posix_spawn 拉起的【root 身份】独立进程（懒人符号
+   [SysApp] restartAsRootBg + posix_spawnattr_set_persona_np 铁证）。
+   必须 root persona 提权（照 spawnEngineAsRoot 同款：0x400 + persona 99 + uid/gid 0），
+   mobile 身份跑 UIApplicationMain 建球 = 前台 App 场景，切后台照样消失（v1.8.43 根因）。 */
 - (void)spawnHudBootrun {
     NSString *bundlePath = [[NSBundle mainBundle] resourcePath];
     NSString *hudPath = [bundlePath stringByAppendingPathComponent:@"AilinHUD.app/AilinHUD"];
@@ -223,11 +225,31 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         waitpid(pk, &pst, 0);
     }
     usleep(200 * 1000);
+
+    /* ★ v1.8.44 root persona 提权（照 spawnEngineAsRoot：AutoGo _AGSpawnWithRootPreference
+       反汇编顺序：init → setflags(0x400=POSIX_SPAWN_SETPERSONA) → persona_np(99,1) → uid 0 → gid 0） */
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, 0x400);
+    posix_spawnattr_set_persona_np(&attr, 99, 1);
+    posix_spawnattr_set_persona_uid_np(&attr, 0);
+    posix_spawnattr_set_persona_gid_np(&attr, 0);
+
+    /* stderr 重定向到 /tmp/ailintouch_hud.err —— HUD 崩溃/启动错误直接落盘，/hud 端点可读 */
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 1, "/tmp/ailintouch_hud.err",
+                                     O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    posix_spawn_file_actions_addopen(&fa, 2, "/tmp/ailintouch_hud.err",
+                                     O_WRONLY | O_CREAT | O_APPEND, 0644);
+
     pid_t pid = 0;
     char *argv[] = {(char *)[hudPath UTF8String], "bootrun", NULL};
-    int rc = posix_spawn(&pid, [hudPath UTF8String], NULL, NULL, argv, environ);
+    int rc = posix_spawn(&pid, [hudPath UTF8String], &fa, &attr, argv, environ);
+    posix_spawn_file_actions_destroy(&fa);
+    posix_spawnattr_destroy(&attr);
     if (rc == 0) {
-        [self appTrace:[NSString stringWithFormat:@"hud-spawned bootrun pid=%d", pid]];
+        [self appTrace:[NSString stringWithFormat:@"hud-spawned-root bootrun pid=%d", pid]];
     } else {
         [self appTrace:[NSString stringWithFormat:@"hud-spawn-fail-%s", strerror(rc)]];
     }
@@ -475,8 +497,9 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [self pollEngineReady];
     }
 
-    /* ★ v1.8.25 用户指示：先跑通 AilinHUD 的 HTTP server 日志（8081），
-       再管 touch 引擎。主 App 拉起 AilinHUD（bootrun 纯 HTTP 模式）。 */
+    /* ★ v1.8.44 拉起 AilinHUD 独立进程（root persona）：scene-based
+       UIApplicationMain → HUDSceneDelegate willConnect 建球 + SBS 注册全局。
+       独立进程球不随主 App scene 生命周期 —— 切后台不消失（懒人 RootCore 同款）。 */
     [self spawnHudBootrun];
 
     /* ★ v1.8.21 状态刷新改为【事件驱动】，删除 30s 定时轮询（用户建议：

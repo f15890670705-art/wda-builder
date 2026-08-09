@@ -51,8 +51,18 @@ static UIWindow *g_manualWindow = nil;
 + (void)manualInstallBall {
     hud_mark(@"manual-install-start");
     @try {
-        /* 1. 窗口（不绑 scene，懒人 setupHUDWindow 姿势） */
-        g_manualWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        /* 1. 窗口（v1.8.44 兜底：有 scene 就绑 scene（拿有效 cid），无 scene 裸窗） */
+        UIWindowScene *ws = nil;
+        @try {
+            ws = (UIWindowScene *)[[[UIApplication sharedApplication] connectedScenes] anyObject];
+        } @catch (NSException *e) { ws = nil; }
+        if (ws) {
+            g_manualWindow = [[UIWindow alloc] initWithWindowScene:ws];
+            hud_mark(@"manual-window-scene-bound");
+        } else {
+            g_manualWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+            hud_mark(@"manual-window-no-scene");
+        }
         g_manualWindow.backgroundColor = [UIColor clearColor];
         g_manualWindow.windowLevel = 20000002.0;
         UIViewController *vc = [UIViewController new];
@@ -271,31 +281,23 @@ static UIWindow *g_manualWindow = nil;
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     hud_mark(@"appdelegate");
 
-    /* ★ v1.8.1 legacy 模式：窗口手动创建（不依赖 scene:willConnect） */
-    self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    self.window.backgroundColor = [UIColor clearColor];
-    self.window.windowLevel = 20000002.0;
-
-    UIViewController *vc = [UIViewController new];
-    vc.view.backgroundColor = [UIColor clearColor];
-    self.window.rootViewController = vc;
-
-    /* 悬浮球 */
-    CGFloat size = 56;
-    CGFloat x = 20;
-    CGFloat y = [UIScreen mainScreen].bounds.size.height / 2 - size;
-    HUDBall *ball = [[HUDBall alloc] initWithFrame:CGRectMake(x, y, size, size)];
-    [vc.view addSubview:ball];
-
-    [self.window makeKeyAndVisible];
-    hud_mark(@"window-shown");
-
-    /* ★ v1.8.1 二进制 FBScene（懒人 RootCore 同款）：
-       FBSceneManager 手动创建 scene + UIRootWindowScenePresentationBinder 绑定 */
-    [self createFrontBoardScene];
-
-    /* SBS 注册 → 全局悬浮 */
-    [self registerToSpringBoard];
+    /* ★ v1.8.44 scene-based：窗口/球/SBS 注册全部交给 HUDSceneDelegate
+       willConnect（窗口 initWithWindowScene: 绑 scene —— 懒人 RootCore 铁证）。
+       兜底：spawn 进程若无 scene 创建（willConnect 不触发），3s 后手动建球
+       （manualInstallBall 裸窗口 + FBScene/binder + SBS 注册，v1.8.36 姿势）。 */
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        @try {
+            if ([[UIApplication sharedApplication] connectedScenes].count == 0) {
+                hud_mark(@"no-scene-fallback-manual");
+                [HUDAppDelegate manualInstallBall];
+            } else {
+                hud_mark(@"scene-ok");
+            }
+        } @catch (NSException *e) {
+            hud_mark([NSString stringWithFormat:@"scene-check-ex-%@", e.name]);
+        }
+    });
 
     return YES;
 }

@@ -13,9 +13,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.8.43</string>
+	<string>1.8.44</string>
 	<key>CFBundleVersion</key>
-	<string>1.8.43</string>
+	<string>1.8.44</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MinimumOSVersion</key>
@@ -28,10 +28,28 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
-	<!-- ★ v1.8.1 关键：无 UIApplicationSceneManifest = legacy 模式 →
-	     UIApplicationMain 不等 scene 连接 → 不卡 booting（v1.5.0 共享
-	     bundle + SceneManifest 卡死的根因）。悬浮球窗口由 didFinish
-	     手动创建 + FBSceneManager 二进制 scene + binder（懒人 RootCore 同款） -->
+	<!-- ★ v1.8.44 照懒人 RootCore（com.nx.RootCore）真实 Info.plist 铁证：
+	     完整 UIApplicationSceneManifest + SceneDelegate —— RootCore 是
+	     scene-based UIApplication 进程，窗口 initWithWindowScene: 绑 scene
+	     才能拿到有效 WindowServer contextID + 渲染（v1.8.36 legacy 裸窗口
+	     registered-cid 但球不渲染的根因）。 -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>HUDSceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 	<!-- daemon 化：SpringBoard 不把它当普通前台 App -->
 	<key>SBAppIsDaemon</key>
 	<true/>

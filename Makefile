@@ -11,8 +11,11 @@
 # 无 Mac？用 .github/workflows/build-ipa.yml 在 GitHub Actions 免费云构建
 
 APP_NAME    = AilinTouch
+HUD_NAME    = AilinHUD
+HUD_BUNDLE  = AilinHUD.app
 BUILD_DIR   = build
 APP_DIR     = $(BUILD_DIR)/$(APP_NAME).app
+HUD_DIR     = $(BUILD_DIR)/$(HUD_BUNDLE)
 
 SDK  = $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
 ARCH = arm64
@@ -37,7 +40,7 @@ APP_SOURCES  = Sources/main.m Sources/AppDelegate.m \
                Sources/DirListViewController.m \
                Sources/FloatingBall.m Sources/FloatingWindowManager.m
 HUD_SOURCES  = Sources/HUD/main.m Sources/HUD/HUDAppDelegate.m \
-               Sources/HUD/HUDSceneDelegate.m Sources/HUD/HUDBall.m
+               Sources/HUD/HUDBall.m
 ENGINE_SOURCE = Sources/touch_engine.c
 
 all: build sign ipa
@@ -46,17 +49,19 @@ build:
 	@mkdir -p $(APP_DIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(APP_SOURCES) -o $(APP_DIR)/$(APP_NAME)
 	$(CC) $(CFLAGS) $(ENGINE_SOURCE) -o $(APP_DIR)/touch_engine
-	# ★ v1.8.0 恢复独立悬浮球进程 AilinHUD（照懒人 RootCore 反汇编铁证）：
+	# ★ v1.8.1 AilinHUD 独立 .app（照懒人 RootCore 终极铁证重构）：
 	#   懒人 RootCore（com.nx.RootCore）= 独立 UIApplication 进程（@_UIApplicationMain
-	#   + FBSceneManager 二进制 scene + UIRootWindowScenePresentationBinder）——
-	#   悬浮球挂在二进制 scene 上，独立于主 App 生命周期 → 全局持久 + 卸载球还在。
-	#   AilinHUD 二进制放主 App bundle 根目录（共享 Info.plist = 已安装身份，
-	#   现在 Info.plist 已有 BSServiceDomains → FrontBoard 给 scene，不再卡 booting）。
-	$(CC) $(CFLAGS) $(LDFLAGS) $(HUD_SOURCES) -o $(APP_DIR)/AilinHUD
-	@cp Resources/Info.plist $(APP_DIR)/Info.plist
+	#   + FBSceneManager 二进制 scene + UIRootWindowScenePresentationBinder）。
+	#   独立 bundle id + 【无 SceneManifest = legacy 模式】→ UIApplicationMain
+	#   不等 scene 连接 → 不卡 booting（v1.5.0 共享主 bundle+SceneManifest 卡死的根因）。
+	#   didFinish 手动建窗口 + FBSceneManager 二进制 scene + binder 绑系统 root window。
+	@mkdir -p $(HUD_DIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(HUD_SOURCES) -o $(HUD_DIR)/$(HUD_NAME)
+	@cp Resources/HUD/Info.plist $(HUD_DIR)/Info.plist
+	@printf 'APPL????' > $(HUD_DIR)/PkgInfo
 	@cp Resources/AppIcon/*.png $(APP_DIR)/
 	@cp Resources/silence.wav $(APP_DIR)/
-	@echo "== build done (App + touch_engine + AilinHUD + icons + silence.wav) =="
+	@echo "== build done (App + touch_engine + AilinHUD.app) =="
 
 sign:
 	@echo "== signing App =="
@@ -64,18 +69,19 @@ sign:
 	@echo "== signing touch_engine =="
 	ldid -SEntitlements.plist $(APP_DIR)/touch_engine
 	@echo "== signing AilinHUD =="
-	ldid -SEntitlements.plist $(APP_DIR)/AilinHUD
+	ldid -SEntitlements.plist $(HUD_DIR)/$(HUD_NAME)
 	@chmod 755 $(APP_DIR)/touch_engine
-	@chmod 755 $(APP_DIR)/AilinHUD
+	@chmod 755 $(HUD_DIR)/$(HUD_NAME)
 	@echo "== verify =="
 	@ldid -e $(APP_DIR)/$(APP_NAME) | grep -q "event-dispatch" && echo "OK: App event-dispatch" || echo "WARN: App event-dispatch missing"
 	@ldid -e $(APP_DIR)/touch_engine | grep -q "event-dispatch" && echo "OK: engine event-dispatch" || echo "WARN: engine event-dispatch missing"
-	@ldid -e $(APP_DIR)/AilinHUD | grep -q "accessibility-window-hosting" && echo "OK: HUD accessibility-window-hosting" || echo "WARN: HUD accessibility-window-hosting missing"
+	@ldid -e $(HUD_DIR)/$(HUD_NAME) | grep -q "accessibility-window-hosting" && echo "OK: HUD accessibility-window-hosting" || echo "WARN: HUD accessibility-window-hosting missing"
 
 ipa:
 	@rm -rf $(BUILD_DIR)/Payload
 	@mkdir -p $(BUILD_DIR)/Payload
 	@cp -R $(APP_DIR) $(BUILD_DIR)/Payload/
+	@cp -R $(HUD_DIR) $(BUILD_DIR)/Payload/
 	# PkgInfo —— iOS 安装器要求存在 (8 字节 "APPL????")
 	@printf 'APPL????' > $(APP_DIR)/PkgInfo
 	@cp $(APP_DIR)/PkgInfo $(BUILD_DIR)/Payload/$(APP_NAME).app/PkgInfo

@@ -36,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.0"
+#define ENGINE_VERSION "1.8.1"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -591,20 +591,33 @@ extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *, uid_t);
 extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 
 static void ensure_hud(void) {
-    /* 引擎路径（App spawn 时在 App bundle 内）→ 主 App bundle 根目录 */
+    /* 引擎路径（App spawn 时在 App bundle 内）→ 主 App bundle 目录 */
     char self[1024] = {0};
     uint32_t sz = sizeof(self);
     _NSGetExecutablePath(self, &sz);
     char *slash = strrchr(self, '/');
     if (!slash) { LOG("hud: bad self path %s", self); return; }
-    char hud_bin[1024];
-    snprintf(hud_bin, sizeof(hud_bin), "%.*s/AilinHUD", (int)(slash - self), self);
 
-    /* spawn AilinHUD（root，共享主 App Info.plist = 已安装身份） */
+    /* ★ v1.8.1: AilinHUD 独立 .app（AilinHUD.app/AilinHUD）——
+       独立 bundle id + 无 SceneManifest（legacy 模式）→ UIApplicationMain
+       不等 scene 连接 → 不卡 booting。AilinHUD.app 打包在 IPA 的
+       Payload/AilinHUD.app，运行时拷贝到主 App bundle 目录下
+       （AilinTouch.app/AilinHUD.app/AilinHUD）。 */
+    char hud_bin[1024];
+    snprintf(hud_bin, sizeof(hud_bin), "%.*s/AilinHUD.app/AilinHUD", (int)(slash - self), self);
+
+    /* 若独立 .app 不存在，兜底试 bundle 根目录（旧布局） */
     if (access(hud_bin, X_OK) != 0) {
-        LOG("AilinHUD binary missing: %s", hud_bin);
-        return;
+        char fallback[1024];
+        snprintf(fallback, sizeof(fallback), "%.*s/AilinHUD", (int)(slash - self), self);
+        if (access(fallback, X_OK) == 0) {
+            snprintf(hud_bin, sizeof(hud_bin), "%s", fallback);
+        } else {
+            LOG("AilinHUD binary missing: %s", hud_bin);
+            return;
+        }
     }
+
     /* 先杀旧 HUD（防多开）—— iOS 上 system() 不可用，用 posix_spawn pkill */
     pid_t pk;
     char *pka[] = {"/usr/bin/pkill", "-f", "AilinHUD", NULL};
@@ -615,7 +628,9 @@ static void ensure_hud(void) {
     usleep(200 * 1000);
 
     pid_t pid;
-    char *argv[] = {(char*)hud_bin, NULL};
+    /* ★ v1.8.1 照懒人 RootCore main（0x1000a65c4）：传 "bootrun" 参数 →
+       不走 UIApplicationMain 的 scene 等待路径（双保险，legacy 模式 + bootrun） */
+    char *argv[] = {(char*)hud_bin, "bootrun", NULL};
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
     posix_spawnattr_set_persona_np(&attr, 99, 0);

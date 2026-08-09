@@ -30,13 +30,13 @@ LDFLAGS = -arch $(ARCH) -isysroot $(SDK) \
           -framework IOKit -framework QuartzCore \
           -framework AVFoundation -framework AudioToolbox
 
-# ★ v1.8.55 HUD 单独编译 arm64e：iOS 14.6 的 /bin/sh、/bin/launchctl 都是
-#   arm64e 系统二进制，arm64 进程 exec 不了（v1.8.54 实测 popen n=0 +
-#   launchctl-spawn-fail-85 = arm64e exec 失败）。懒人 MQLaunchd 是 arm64e
-#   编译所以能 exec 系统二进制提交 launchd job。HUD arm64e → exec
-#   launchctl submit → 注册成 launchd daemon → 系统身份 → createScene 成功。
-#   引擎/主 App 保持 arm64（触摸模块不动）。
-HUD_ARCH = arm64e
+# ★ v1.8.55 HUD 单独编译 arm64e → ★ v1.8.56 改回 arm64：
+#   v1.8.55 实测 hud-spawn-fail-Bad CPU type in executable —— arm64 主 App
+#   spawn 不了 arm64e HUD（iOS 硬限制）！arm64e 路线废。
+#   ★ v1.8.56 新路线：/remount 端点（mount() 系统调用 remount rw）+ 写
+#   /Library/LaunchDaemons plist → 重启后 launchd 加载 HUD daemon（懒人同款）。
+#   HUD 保持 arm64（主 App 能 spawn；daemon 由 launchd 拉，不 exec 系统二进制）。
+HUD_ARCH = arm64
 HUD_CFLAGS = -arch $(HUD_ARCH) -isysroot $(SDK) -fobjc-arc -Wall \
              -Wno-deprecated-declarations \
              -ISources

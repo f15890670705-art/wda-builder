@@ -17,6 +17,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <sys/mount.h>
 #include <sys/wait.h>
 #include <sys/time.h>
 #include <netinet/in.h>
@@ -39,7 +40,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.55"
+#define ENGINE_VERSION "1.8.56"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -488,7 +489,7 @@ static void handle_client(int cfd) {
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                 hl, haux);
         } else if (strncmp(path, "/exec", 5) == 0) {
-            /* ★ v1.8.55 /exec?cmd=xxx root 执行命令（诊断端点，不动触摸逻辑）：
+            /* ★ v1.8.56 /exec?cmd=xxx root 执行命令（诊断端点，不动触摸逻辑）：
                验证设备 launchd daemon 能力（ps mqlaunchd / mount 系统分区 /
                launchctl list）——懒人/越狱 daemon plist 都在 /Library/LaunchDaemons，
                MQLaunchd 二进制在 /Applications，若 launchd 真加载了 = 我们能复刻 */
@@ -560,6 +561,38 @@ static void handle_client(int cfd) {
                         cn, cbuf);
                 }
             }
+        } else if (strncmp(path, "/remount", 8) == 0) {
+            /* ★ v1.8.56 /remount 尝试系统分区 remount rw（mount() 系统调用，
+               不需要 exec arm64e 二进制）——用户设备有越狱残留（Cydia/
+               rocketbootstrap 的 LaunchDaemons plist 在），内核可能支持 remount。
+               成功 → 写 /Library/LaunchDaemons plist → 重启后 launchd 加载
+               HUD daemon（懒人同款）。 */
+            char rbuf[1024] = {0};
+            size_t ro = 0;
+            /* 1. 先测当前写权限 */
+            int fd = open("/Library/LaunchDaemons/com.ailintouch.test", O_WRONLY|O_CREAT|O_TRUNC, 0644);
+            if (fd >= 0) {
+                ro += snprintf(rbuf+ro, sizeof(rbuf)-ro, "write-ok\n");
+                close(fd);
+                unlink("/Library/LaunchDaemons/com.ailintouch.test");
+            } else {
+                ro += snprintf(rbuf+ro, sizeof(rbuf)-ro, "write-fail errno=%d %s\n", errno, strerror(errno));
+            }
+            /* 2. remount 尝试（MNT_UPDATE，不带 MNT_RDONLY = 转 rw） */
+            int mr = mount("apfs", "/", MNT_UPDATE, NULL);
+            ro += snprintf(rbuf+ro, sizeof(rbuf)-ro, "remount-apfs=%d errno=%d %s\n", mr, errno, strerror(errno));
+            /* 3. 再测写（remount 后） */
+            fd = open("/Library/LaunchDaemons/com.ailintouch.test", O_WRONLY|O_CREAT|O_TRUNC, 0644);
+            if (fd >= 0) {
+                ro += snprintf(rbuf+ro, sizeof(rbuf)-ro, "write2-ok\n");
+                close(fd);
+                unlink("/Library/LaunchDaemons/com.ailintouch.test");
+            } else {
+                ro += snprintf(rbuf+ro, sizeof(rbuf)-ro, "write2-fail errno=%d %s\n", errno, strerror(errno));
+            }
+            snprintf(reply, sizeof(reply),
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                ro, rbuf);
         } else if (strncmp(path, "/dir", 4) == 0) {
             /* /dir?path=/var/mobile/ailintouch  列出目录（root 引擎读，App 免 root） */
             char dirp[512] = {0};

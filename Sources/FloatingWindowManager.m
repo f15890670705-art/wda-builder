@@ -435,42 +435,35 @@
         if (!defCls) { [self reportToEngine:@"fb-def-missing"]; return; }
         id def = ((id(*)(id, SEL))objc_msgSend)(defCls, NSSelectorFromString(@"new"));
 
-        /* ★ v1.8.48 identity 必须设置！v1.8.42 错误地"跳过 identity"（当时
-           FBSMutableSceneIdentity init 抛异常被吞）→ def.identity=nil →
-           FBSceneManager.m:462 断言失败（HUD/主 App 同一行，铁证与身份无关）。
-           正确姿势：FBSSceneIdentity identityWithIdentifier:（不可变类方法）。 */
+        /* ★★ v1.8.49 照懒人 RootCore 反汇编铁证完整重写（0x100080ad4~0x100080d40）：
+           [FBSSceneIdentity identityForIdentifier:[[NSBundle mainBundle] bundleIdentifier]]
+           → [def setIdentity:] → [def setClientIdentity:localIdentity] →
+           [某类 specification] → [def setSpecification:] →
+           [FBSMutableSceneParameters parametersForSpecification:spec]（不是 new!）→
+           params 配置 → [[FBSceneManager sharedInstance] createSceneWithDefinition:def
+           initialParameters:params]。462 断言= def 缺 identity/specification（我们一直
+           缺后面这个）。每个调用打标，失败看日志定位。 */
+
+        /* 2. identity：+identityForIdentifier:（懒人用的方法名，v1.8.48 的
+           identityWithIdentifier: 是错的方法名） */
         id identity = nil;
-        @try {
-            Class sceneIdentCls = NSClassFromString(@"FBSSceneIdentity");
-            if (sceneIdentCls) {
-                SEL sel = NSSelectorFromString(@"identityWithIdentifier:");
-                if ([sceneIdentCls respondsToSelector:sel]) {
-                    NSString *ident = [NSString stringWithFormat:@"com.ailintouch.ball.%d",
-                        (int)([NSDate timeIntervalSinceReferenceDate] * 1000)];
-                    identity = ((id(*)(id, SEL, id))objc_msgSend)(sceneIdentCls, sel, ident);
-                    [self reportToEngine:identity ? @"fb-ident-ok-sceneident"
-                                                  : @"fb-ident-nil-sceneident"];
-                }
-            }
-        } @catch (NSException *e) {
-            [self reportToEngine:[NSString stringWithFormat:@"fb-ident-ex-%@", e.name]];
-        }
-        if (!identity) {
-            /* 兜底：FBSMutableSceneIdentity initWithIdentifier:（v1.8.39 抛异常的路径，
-               再试一次看是否参数格式问题） */
+        NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
+        for (NSString *clsName in @[@"FBSSceneIdentity", @"FBSMutableSceneIdentity"]) {
+            Class identCls = NSClassFromString(clsName);
+            if (!identCls) { [self reportToEngine:[NSString stringWithFormat:@"fb-ident-cls-missing-%@", clsName]]; continue; }
             @try {
-                Class mutIdentCls = NSClassFromString(@"FBSMutableSceneIdentity");
-                if (mutIdentCls) {
-                    NSString *ident = [NSString stringWithFormat:@"com.ailintouch.ball.%d",
-                        (int)([NSDate timeIntervalSinceReferenceDate] * 1000)];
-                    id inst = ((id(*)(id, SEL))objc_msgSend)(mutIdentCls, NSSelectorFromString(@"alloc"));
-                    identity = ((id(*)(id, SEL, id))objc_msgSend)(inst, NSSelectorFromString(@"initWithIdentifier:"), ident);
-                    [self reportToEngine:identity ? @"fb-ident-ok-mutable"
-                                                  : @"fb-ident-nil-mutable"];
+                SEL sel = NSSelectorFromString(@"identityForIdentifier:");
+                if ([identCls respondsToSelector:sel]) {
+                    identity = ((id(*)(id, SEL, id))objc_msgSend)(identCls, sel, bundleId);
+                    [self reportToEngine:identity ? [NSString stringWithFormat:@"fb-ident-ok-%@", clsName]
+                                                  : [NSString stringWithFormat:@"fb-ident-nil-%@", clsName]];
+                } else {
+                    [self reportToEngine:[NSString stringWithFormat:@"fb-ident-nosel-%@", clsName]];
                 }
             } @catch (NSException *e) {
-                [self reportToEngine:[NSString stringWithFormat:@"fb-ident-mut-ex-%@", e.name]];
+                [self reportToEngine:[NSString stringWithFormat:@"fb-ident-ex-%@-%@", clsName, e.name]];
             }
+            if (identity) break;
         }
         if (identity) {
             @try {
@@ -489,9 +482,100 @@
             [self reportToEngine:@"fb-ident-all-fail"];
         }
 
+        /* 3. clientIdentity：+localIdentity（懒人 0x100080b84 铁证） */
+        @try {
+            for (NSString *clsName in @[@"FBSSceneIdentity", @"FBSMutableSceneIdentity", @"FBSProcessIdentity"]) {
+                Class c = NSClassFromString(clsName);
+                if (!c) continue;
+                SEL sel = NSSelectorFromString(@"localIdentity");
+                if ([c respondsToSelector:sel]) {
+                    id li = ((id(*)(id, SEL))objc_msgSend)(c, sel);
+                    if (li && [def respondsToSelector:NSSelectorFromString(@"setClientIdentity:")]) {
+                        ((void(*)(id, SEL, id))objc_msgSend)(def, NSSelectorFromString(@"setClientIdentity:"), li);
+                        [self reportToEngine:[NSString stringWithFormat:@"fb-clientid-ok-%@", clsName]];
+                    } else {
+                        [self reportToEngine:[NSString stringWithFormat:@"fb-clientid-nil-%@", clsName]];
+                    }
+                    break;
+                } else {
+                    [self reportToEngine:[NSString stringWithFormat:@"fb-clientid-nosel-%@", clsName]];
+                }
+            }
+        } @catch (NSException *e) {
+            [self reportToEngine:[NSString stringWithFormat:@"fb-clientid-ex-%@", e.name]];
+        }
+
+        /* 4. specification：懒人 0x100080bac ~ 0x100080bc8（类方法 +specification 或 new） */
+        id spec = nil;
+        @try {
+            for (NSString *clsName in @[@"FBSMutableSceneSpecification", @"FBSMutableSceneDefinition", @"FBSSceneSpecification"]) {
+                Class c = NSClassFromString(clsName);
+                if (!c) continue;
+                SEL sel = NSSelectorFromString(@"specification");
+                if ([c respondsToSelector:sel]) {
+                    spec = ((id(*)(id, SEL))objc_msgSend)(c, sel);
+                    [self reportToEngine:spec ? [NSString stringWithFormat:@"fb-spec-ok-%@", clsName]
+                                              : [NSString stringWithFormat:@"fb-spec-nil-%@", clsName]];
+                    break;
+                } else {
+                    [self reportToEngine:[NSString stringWithFormat:@"fb-spec-nosel-%@", clsName]];
+                }
+            }
+        } @catch (NSException *e) {
+            [self reportToEngine:[NSString stringWithFormat:@"fb-spec-ex-%@", e.name]];
+        }
+        if (!spec) {
+            Class sc = NSClassFromString(@"FBSMutableSceneSpecification");
+            if (sc) { spec = ((id(*)(id, SEL))objc_msgSend)(sc, NSSelectorFromString(@"new")); [self reportToEngine:@"fb-spec-new"]; }
+        }
+        if (spec) {
+            @try {
+                SEL setSel = NSSelectorFromString(@"setSpecification:");
+                if ([def respondsToSelector:setSel]) {
+                    ((void(*)(id, SEL, id))objc_msgSend)(def, setSel, spec);
+                    [self reportToEngine:@"fb-spec-set-ok"];
+                } else {
+                    [def setValue:spec forKey:@"specification"];
+                    [self reportToEngine:@"fb-spec-set-kvc"];
+                }
+            } @catch (NSException *e) {
+                [self reportToEngine:[NSString stringWithFormat:@"fb-spec-set-ex-%@", e.name]];
+            }
+        }
+
+        /* 5. parameters：+parametersForSpecification:spec（懒人 0x100080bf8 铁证，
+           不是 new！参数类型由 specification 决定） */
         Class paramsCls = NSClassFromString(@"FBSMutableSceneParameters");
-        id params = paramsCls ? ((id(*)(id, SEL))objc_msgSend)(paramsCls, NSSelectorFromString(@"new")) : nil;
+        id params = nil;
+        if (paramsCls) {
+            @try {
+                SEL sel = NSSelectorFromString(@"parametersForSpecification:");
+                if ([paramsCls respondsToSelector:sel]) {
+                    params = ((id(*)(id, SEL, id))objc_msgSend)(paramsCls, sel, spec);
+                    [self reportToEngine:params ? @"fb-params-from-spec" : @"fb-params-from-spec-nil"];
+                } else {
+                    [self reportToEngine:@"fb-params-nosel-fromspec"];
+                }
+            } @catch (NSException *e) {
+                [self reportToEngine:[NSString stringWithFormat:@"fb-params-ex-%@", e.name]];
+            }
+        }
+        if (!params && paramsCls) {
+            params = ((id(*)(id, SEL))objc_msgSend)(paramsCls, NSSelectorFromString(@"new"));
+            [self reportToEngine:@"fb-params-new-fallback"];
+        }
         if (!params) { [self reportToEngine:@"fb-params-fail"]; return; }
+
+        /* 6. params 配置（懒人 0x100080c18~0x100080d1c：setForeground:1、
+           setInterfaceOrientation:1、setLevel:1、setSettings:、setClientSettings:） */
+        @try {
+            for (NSString *s in @[@"setForeground:", @"setInterfaceOrientation:"]) {
+                SEL sel = NSSelectorFromString(s);
+                if ([params respondsToSelector:sel]) {
+                    ((void(*)(id, SEL, int))objc_msgSend)(params, sel, 1);
+                }
+            }
+        } @catch (NSException *e) { }
 
         SEL createSel = NSSelectorFromString(@"createSceneWithDefinition:initialParameters:");
         if (![manager respondsToSelector:createSel]) { [self reportToEngine:@"fb-create-no-sel"]; return; }

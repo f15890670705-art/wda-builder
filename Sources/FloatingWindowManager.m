@@ -241,13 +241,23 @@
        心跳重复注册是浪费（v1.8.12 实测每次取 cid 都不同=注册也白注册）。 */
     self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer *t) {
         [self reportToEngine:@"hb-alive"];
-        /* ★ v1.8.40 心跳兜底检测后台：daemon 化 App 不触发
-           applicationDidEnterBackground（v1.8.39 实测 ball-detach-scene 从未
-           出现 = detach 没执行 = 切后台球被系统隐藏前没来得及脱离 scene）。
-           心跳里主动检查 applicationState：非 active 立即 detach（幂等）。 */
-        if (self.floatingWindow &&
-            [UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
-            [self detachBallFromScene];
+        /* ★ v1.8.41 心跳兜底检测：检查【窗口 scene 的激活状态】（不是
+           applicationState！v1.8.40 实测 daemon 化 App 的 applicationState
+           永远 active，willResignActive/didEnterBackground 全不触发——
+           但系统按 scene 状态隐藏窗口）。scene 非 ForegroundActive 就 detach。 */
+        if (self.floatingWindow) {
+            BOOL needDetach = NO;
+            @try {
+                UIWindowScene *ws = self.floatingWindow.windowScene;
+                if (ws && ws.activationState != UISceneActivationStateForegroundActive) {
+                    needDetach = YES;
+                }
+            } @catch (NSException *e) {
+                needDetach = YES;
+            }
+            if (needDetach) {
+                [self detachBallFromScene];
+            }
         }
     }];
 
@@ -263,10 +273,34 @@
        卡顿源之一；root scene 拿不到（iOS15+），跟随前台 scene 效果有限。 */
 
     [self reportToEngine:@"ball-shown"];
+
+    /* ★ v1.8.41 监听 UIScene 后台/失活通知（即时 detach，不等 30s 心跳）：
+       daemon 化 App 的 applicationState 永远 active、生命周期回调不触发
+       （v1.8.40 实测），但 scene 的通知会发（系统按 scene 状态管理窗口）。 */
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+        name:UISceneDidEnterBackgroundNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+        selector:@selector(sceneDidGoBackground:)
+        name:UISceneDidEnterBackgroundNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+        name:UISceneWillDeactivateNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+        selector:@selector(sceneDidGoBackground:)
+        name:UISceneWillDeactivateNotification object:nil];
+}
+
+/* ★ v1.8.41 scene 进入后台/失活 → 立即 detach（幂等） */
+- (void)sceneDidGoBackground:(NSNotification *)note {
+    [self reportToEngine:@"scene-bg-detach"];
+    [self detachBallFromScene];
 }
 
 - (void)hideFloatingBall {
     if (!self.floatingWindow) return;
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+        name:UISceneDidEnterBackgroundNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+        name:UISceneWillDeactivateNotification object:nil];
     [self.hbTimer invalidate];
     self.hbTimer = nil;
     [self unregisterFromSpringBoard];

@@ -35,15 +35,11 @@
 - (BOOL)_shouldCreateContextAsSecure { return YES; }
 @end
 
-/* UIWindow 私有（Letterpress UIWindow+Private.h 同款） */
+/* UIWindow 私有（Letterpress UIWindow+Private.h 同款）。
+   CAContext 是 QuartzCore 私有类（公开头无），用 id 动态调用 */
 @interface UIWindow (HUDPrivate)
-- (CAContext *)_boundContext;
+- (id)_boundContext;
 - (unsigned int)_contextId;
-@end
-
-/* CAContext 私有 */
-@interface CAContext (HUDPrivate)
-- (void)setSecure:(BOOL)secure;
 @end
 
 /* 诊断辅助：写 /tmp/ailintouch_hud.alive（引擎 /hud 可读）

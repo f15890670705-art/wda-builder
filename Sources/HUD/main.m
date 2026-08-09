@@ -91,8 +91,9 @@ int main(int argc, char *argv[]) {
         /* ★ v1.8.25 bootrun 模式（照懒人 RootCore main argv 检查）：
            AilinHUD 被拉起时传 bootrun → 纯 HTTP server，不调 UIApplicationMain
            （UIApplicationMain 裸进程会卡 scene，v1.8.0-1.8.2 实测）。
-           HTTP 跑通后再加界面/悬浮球（届时走正常 UIApplicationMain 模式）。 */
-        if (argc >= 3 && strcmp(argv[1], "bootrun") == 0) {
+           ★ v1.8.26 修复：argc>=3 → argc>=2（主 App spawn 传 {路径, bootrun}
+           argc=2，原判断导致 bootrun 分支不进 → 卡 booting 实测 hud_alive=booting）*/
+        if (argc >= 2 && strcmp(argv[1], "bootrun") == 0) {
             hud_mark(@"bootrun-http-mode");
             pthread_t th;
             pthread_create(&th, NULL, hud_http_thread, NULL);

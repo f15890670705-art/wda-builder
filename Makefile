@@ -28,9 +28,7 @@ LDFLAGS = -arch $(ARCH) -isysroot $(SDK) \
           -framework Foundation -framework UIKit \
           -framework CoreFoundation -framework CoreGraphics \
           -framework IOKit -framework QuartzCore \
-          -framework AVFoundation -framework AudioToolbox \
-          -F $(SDK)/System/Library/PrivateFrameworks \
-          -framework FrontBoardServices -framework FrontBoard
+          -framework AVFoundation -framework AudioToolbox
 
 APP_SOURCES  = Sources/main.m Sources/AppDelegate.m \
                Sources/AilinTouchSceneDelegate.m \

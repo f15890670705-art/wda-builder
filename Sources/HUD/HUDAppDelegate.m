@@ -16,6 +16,7 @@
 #import "HUDAppDelegate.h"
 #import "HUDBall.h"
 #import <objc/message.h>
+#import <dlfcn.h>
 
 /* 诊断辅助：写 /tmp/ailintouch_hud.alive（引擎 /hud 可读）
    ★ v1.8.34 双写 /tmp/ailintouch_hud.log（引擎 /log?src=hud 可读，带时间戳） */
@@ -88,6 +89,12 @@ static UIWindow *g_manualWindow = nil;
 
 /* 类方法版 createFrontBoardScene（照实例方法，窗口用 g_manualWindow） */
 + (void)manualCreateFrontBoardScene {
+    /* ★ v1.8.37 dlopen 加载 FrontBoardServices/FrontBoard（私有 framework，
+       不编译链接——SDK 无 PrivateFrameworks 路径，运行时加载即可） */
+    @try {
+        dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
+        dlopen("/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard", RTLD_NOW);
+    } @catch (NSException *e) {}
     @try {
         Class mgrCls = NSClassFromString(@"FBSceneManager");
         if (!mgrCls) { hud_mark(@"fb-mgr-missing"); return; }

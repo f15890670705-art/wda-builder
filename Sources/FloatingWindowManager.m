@@ -368,13 +368,16 @@
                 [inv invoke];
                 __unsafe_unretained id ret = nil;
                 [inv getReturnValue:&ret];
-                if (ret) { fbScene = ret; break; }
+                if (ret) { fbScene = ret; [self reportToEngine:[NSString stringWithFormat:@"fbscene-got-%@", k]]; break; }
             } @catch (NSException *e) { }
         }
         if (!fbScene) {
-            /* 兜底：直接传 windowScene 本身（部分 iOS 版本接受） */
-            fbScene = windowScene;
-            [self reportToEngine:@"binder-no-fbscene-fallback"];
+            /* ★ v1.8.10 修复：v1.8.6/1.8.7 fbScene 拿不到时 fallback 传
+               windowScene → addScene: 类型不符抛 binder-exception！
+               iOS15+ UIWindowScene 的 _fbScene 私有 ivar 可能改名/移除。
+               拿不到就跳过 binder（不 fallback 错类型），日志明确。 */
+            [self reportToEngine:@"binder-no-fbscene-skip"];
+            return;
         }
         if ([self.rootBinder respondsToSelector:@selector(addScene:)]) {
             [self.rootBinder addScene:fbScene];

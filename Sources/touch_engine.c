@@ -445,8 +445,7 @@ static void handle_client(int cfd) {
             char *out = malloc(131072);
             if (!out) {
                 snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\n\n");
-                break;
-            }
+            } else {
             size_t ol = 0;
             int i = 0, j = 0;
             while ((i < anc || j < enc) && ol < 131072 - LOG_MAX_LEN) {
@@ -477,6 +476,7 @@ static void handle_client(int cfd) {
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                 tl, tail);
             free(out);
+            }
         } else if (strncmp(path, "/hud", 4) == 0) {
             /* 远程诊断：HUD 存活标记 + 崩溃 stderr（HUD 是独立进程，这里读它的文件） */
             char hbuf[4096] = {0};

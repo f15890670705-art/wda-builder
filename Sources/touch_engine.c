@@ -39,7 +39,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.53"
+#define ENGINE_VERSION "1.8.54"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -350,15 +350,15 @@ static int do_named_key(const char *name) {
 }
 
 static void handle_client(int cfd) {
-    char buf[512] = {0};
+    char buf[2048] = {0};
     ssize_t n = read(cfd, buf, sizeof(buf)-1);
     if (n <= 0) { close(cfd); return; }
 
     char reply[262144];   /* ★ v1.8.32 /log 三段分开输出（每段 64K，128K→256K）*/
     /* HTTP 请求：GET /tap?x=..&y=.. HTTP/1.1 */
     if (strncmp(buf, "GET ", 4) == 0) {
-        char path[256] = {0};
-        sscanf(buf, "GET %255s", path);
+        char path[1024] = {0};
+        sscanf(buf, "GET %1023s", path);
         float a=0,b=0,c=0,d=0; int ms=300;
         if (strncmp(path, "/tap", 4) == 0) {
             sscanf(path, "/tap?x=%f&y=%f", &a, &b);
@@ -488,7 +488,7 @@ static void handle_client(int cfd) {
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                 hl, haux);
         } else if (strncmp(path, "/exec", 5) == 0) {
-            /* ★ v1.8.53 /exec?cmd=xxx root 执行命令（诊断端点，不动触摸逻辑）：
+            /* ★ v1.8.54 /exec?cmd=xxx root 执行命令（诊断端点，不动触摸逻辑）：
                验证设备 launchd daemon 能力（ps mqlaunchd / mount 系统分区 /
                launchctl list）——懒人/越狱 daemon plist 都在 /Library/LaunchDaemons，
                MQLaunchd 二进制在 /Applications，若 launchd 真加载了 = 我们能复刻 */
@@ -516,10 +516,18 @@ static void handle_client(int cfd) {
                 char *out = malloc(65536);
                 size_t n = 0;
                 if (out) {
-                    FILE *p = popen(cmd, "r");
-                    if (p) {
+                    char fullcmd[600];
+                    snprintf(fullcmd, sizeof(fullcmd), "%s 2>&1", cmd);
+                    LOG("exec: %s", fullcmd);
+                    FILE *p = popen(fullcmd, "r");
+                    if (!p) {
+                        int e = errno;
+                        LOG("exec popen failed errno=%d", e);
+                        n = snprintf(out, 65535, "popen failed: %s\n", strerror(e));
+                    } else {
                         n = fread(out, 1, 65535, p);
                         pclose(p);
+                        LOG("exec done n=%zu", n);
                     }
                     out[n] = 0;
                     snprintf(reply, sizeof(reply),

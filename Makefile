@@ -82,7 +82,11 @@ ipa:
 	@rm -rf $(BUILD_DIR)/Payload
 	@mkdir -p $(BUILD_DIR)/Payload
 	@cp -R $(APP_DIR) $(BUILD_DIR)/Payload/
-	@cp -R $(HUD_DIR) $(BUILD_DIR)/Payload/
+	# ★ v1.8.2 修复：AilinHUD.app 必须【嵌套】进主 App bundle（Payload/AilinTouch.app/AilinHUD.app）
+	#   —— TrollStore 只安装 Payload 下的主 App，平级 Payload/AilinHUD.app 根本不会装进设备
+	#   （v1.8.1 实测 hud_alive=(missing) 根因：引擎找 AilinTouch.app/AilinHUD.app/AilinHUD 不存在）。
+	#   嵌套后随主 App 一起安装，引擎 _NSGetExecutablePath 截断主 bundle 路径后天然对上。
+	@cp -R $(HUD_DIR) $(BUILD_DIR)/Payload/$(APP_NAME).app/AilinHUD.app
 	# PkgInfo —— iOS 安装器要求存在 (8 字节 "APPL????")
 	@printf 'APPL????' > $(APP_DIR)/PkgInfo
 	@cp $(APP_DIR)/PkgInfo $(BUILD_DIR)/Payload/$(APP_NAME).app/PkgInfo

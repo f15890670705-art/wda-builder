@@ -215,29 +215,25 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 }
 
 /* ★ v1.8.6 阶段2：轮询引擎 HTTP 就绪（/diag 可连 = 引擎完全起来监听 8080）。
-   球创建前必须先等引擎就绪 —— 分先后分时间，不许一股脑全启动。 */
+   球创建前必须先等引擎就绪 —— 分先后分时间，不许一股脑全启动。
+   ★ v1.8.18 改读【就绪标记文件】/tmp/ailintouch_engine_ready（引擎 HID +
+   socket + HTTP 全建立后才写）——不依赖引擎 HTTP（v1.8.17 实测引擎消失时
+   8080 拒连，HTTP 轮询永远失败）。引擎真正完全建立 = 悬浮球创建时机。 */
 - (void)pollEngineReady {
     static int tries = 0;
-    NSMutableURLRequest *req = [NSMutableURLRequest
-        requestWithURL:[NSURL URLWithString:@"http://127.0.0.1:8080/diag"]];
-    req.timeoutInterval = 1.0;
-    NSURLSessionDataTask *t = [[NSURLSession sharedSession]
-        dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (e == nil && d && d.length > 0) {
-                [self appTrace:[NSString stringWithFormat:@"phase-2 engine-ready tries=%d", tries]];
-                self.engineReady = YES;
-            } else if (tries++ < 30) {
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
-                               dispatch_get_main_queue(), ^{
-                    [self pollEngineReady];
-                });
-            } else {
-                [self appTrace:@"phase-2 engine-not-ready-giveup"];
-            }
+    if ([[NSFileManager defaultManager] fileExistsAtPath:@"/tmp/ailintouch_engine_ready"]) {
+        [self appTrace:[NSString stringWithFormat:@"phase-2 engine-ready tries=%d", tries]];
+        self.engineReady = YES;
+        return;
+    }
+    if (tries++ < 60) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [self pollEngineReady];
         });
-    }];
-    [t resume];
+    } else {
+        [self appTrace:@"phase-2 engine-not-ready-giveup"];
+    }
 }
 
 /* ★ v1.8.6 阶段4：等引擎就绪再建球（超时 9s 也建球，球创建不依赖引擎，

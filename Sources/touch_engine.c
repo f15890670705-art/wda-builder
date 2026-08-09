@@ -37,7 +37,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.17"
+#define ENGINE_VERSION "1.8.18"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -923,6 +923,15 @@ int main(int argc, char *argv[]) {
        sceneReady: 调 FloatingWindowManager showFloatingBallInScene: 创建。
        这里不再 spawn AilinHUD（v1.8.0-1.8.2 的独立进程路线是死路，且会双球/僵尸）。 */
     LOG("hud-in-app mode (v1.8.5), ball in main app, no separate HUD process");
+
+    /* ★ v1.8.18 引擎【完整就绪标记】：HID client + unix socket + HTTP 全部
+       建立后才写 /tmp/ailintouch_engine_ready。App 轮询【文件】（不依赖
+       HTTP），引擎真正完全建立后 App 才创建悬浮球 —— 解决用户批评
+       "悬浮球建立在引擎前面"（v1.8.6-17 的 engine-ready 判定 = /diag HTTP
+       可连太弱，HTTP 起来 ≠ HID 触摸初始化完成，球建得比 touch 二进制早）。 */
+    FILE *rf = fopen("/tmp/ailintouch_engine_ready", "w");
+    if (rf) { fprintf(rf, "1"); fclose(rf); }
+    LOG("engine full ready (HID+sock+HTTP)");
 
     /* HID client 已在 hid_init 里 Schedule 到 main runloop；启动 runloop 驱动它 */
     CFRunLoopRun();

@@ -97,20 +97,18 @@ int main(int argc, char *argv[]) {
     @autoreleasepool {
         signal(SIGPIPE, SIG_IGN);
         hud_mark(@"booting");
-        /* ★ v1.8.34 bootrun 模式：直接调 UIApplicationMain！
-           HUDAppDelegate didFinish 里建不绑 scene 的窗口 + 球 + FBScene +
-           binder + SBS 注册（v1.8.1 写的逻辑一直在，只是 main 没调
-           UIApplicationMain 所以从没跑过）。
-           独立 bundle + legacy（无 SceneManifest）→ UIApplicationMain 不等
-           scene 连接 → 不卡 booting（v1.8.1 当时因打包位置错误没验证过，
-           这次嵌套打包正确，真实验证）。
-           HUD 是独立 root 进程 → 窗口不绑 scene → 切后台球不消失（懒人
-           RootCore 机制）。 */
+        /* ★ v1.8.36 bootrun 模式：先手动建球（不依赖 UIApplicationMain），
+           再调 UIApplicationMain（卡不卡无所谓——照 AutoGo floatball
+           installFloatingBallWindow 顺序）。TrollStore 环境无 launch daemon
+           （EROFS 铁证 v1.8.35），AilinHUD 由引擎 spawnRoot 拉起（root 独立
+           进程，无 scene 前后台概念）→ 球不随 App scene 挂起 → 切后台不消失。 */
         if (argc >= 2 && strcmp(argv[1], "bootrun") == 0) {
             hud_mark(@"ui-main-start");
-            /* 后台线程尝试 launchd 系统 daemon 化（launch_msg 卡住无副作用） */
+            /* 后台线程尝试 launchd（TrollStore 下会失败，无害） */
             pthread_t lt;
             pthread_create(&lt, NULL, hud_launchd_thread, NULL);
+            /* ★ 先手动建球（UIApplicationMain 前）—— 球显示不依赖 UIApplication */
+            [HUDAppDelegate manualInstallBall];
             int rc = UIApplicationMain(argc, argv, nil,
                 NSStringFromClass([HUDAppDelegate class]));
             hud_mark([NSString stringWithFormat:@"exited-%d", rc]);

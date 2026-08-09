@@ -19,6 +19,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setWindowVisible:(BOOL)visible;   /* v1.5.7 照懒人 setHidden:BOOL 切换可见性 */
 - (void)rebuildFloatingWindow;   /* v1.5.5: 回前台重建窗口拿全新 contextID */
 - (void)reportToEngine:(NSString *)msg;   /* App 状态上报到引擎日志（远程诊断） */
+- (void)detachBallFromScene;   /* v1.8.22 切后台窗口脱离 scene（球不随 scene 隐藏） */
+- (void)attachBallToScene;     /* v1.8.22 回前台窗口绑回 scene */
 @end
 
 NS_ASSUME_NONNULL_END

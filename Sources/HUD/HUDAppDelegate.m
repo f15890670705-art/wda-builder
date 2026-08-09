@@ -132,46 +132,16 @@ static UIWindow *g_manualWindow = nil;
         return;
     }
 
-    /* 3. identity */
+    /* 3. identity —— ★ v1.8.42 不再设置！
+       v1.8.39 实测：FBSMutableSceneIdentity 的 init 全抛 NSInvalidArgumentException，
+       设置失败后 def 不干净 → createSceneWithDefinition 卡死（等 FrontBoard）。
+       agoverlayd 符号里【没有任何 identity selector】——它根本不设 identity，
+       def 直接用 new 的干净对象。照 agoverlayd：跳过 identity。 */
     @try {
         Class identCls = NSClassFromString(@"FBSMutableSceneIdentity");
-        if (identCls) {
-            hud_mark(@"fb-ident-class-ok");
-            BOOL identDone = NO;
-            /* 试多种初始化（iOS 版本差异）：initWithBundleIdentifier: / initWithIdentifier: */
-            NSArray *initSels = @[@"initWithBundleIdentifier:", @"initWithIdentifier:"];
-            for (NSString *is in initSels) {
-                SEL initSel = NSSelectorFromString(is);
-                id identAlloc = ((id(*)(id, SEL))objc_msgSend)(identCls, NSSelectorFromString(@"alloc"));
-                if (!identAlloc) continue;
-                id identity = nil;
-                @try {
-                    identity = ((id(*)(id, SEL, id))objc_msgSend)(identAlloc, initSel,
-                        [[NSBundle mainBundle] bundleIdentifier]);
-                } @catch (NSException *e2) {
-                    hud_mark([NSString stringWithFormat:@"fb-ident-%@-ex-%@", is, e2.name]);
-                    continue;
-                }
-                if (identity) {
-                    hud_mark([NSString stringWithFormat:@"fb-ident-ok-%@", is]);
-                    /* setIdentity: 或 setIdentity:with: */
-                    SEL setSel = NSSelectorFromString(@"setIdentity:");
-                    if ([def respondsToSelector:setSel]) {
-                        ((void(*)(id, SEL, id))objc_msgSend)(def, setSel, identity);
-                        hud_mark(@"fb-ident-set-ok");
-                    } else {
-                        hud_mark(@"fb-ident-no-setsel");
-                    }
-                    identDone = YES;
-                    break;
-                }
-            }
-            if (!identDone) hud_mark(@"fb-ident-all-fail");
-        } else {
-            hud_mark(@"fb-ident-class-missing");
-        }
+        hud_mark(identCls ? @"fb-ident-skip-(agoverlayd-no-identity)" : @"fb-ident-class-missing-skip");
     } @catch (NSException *e) {
-        hud_mark([NSString stringWithFormat:@"fb-ident-ex-%@", e.name]);
+        hud_mark(@"fb-ident-check-ex");
     }
 
     /* 4. FBSMutableSceneParameters */
@@ -188,19 +158,32 @@ static UIWindow *g_manualWindow = nil;
         return;
     }
 
-    /* 5. createSceneWithDefinition:initialParameters: */
+    /* 5. createSceneWithDefinition:initialParameters:（★ v1.8.42 后台线程 + 3s 超时，
+       不阻塞主流程——v1.8.39 实测 createScene 可能同步卡死） */
     id fbScene = nil;
+    __block id fbSceneBlock = nil;
+    __block BOOL createDone = NO;
     @try {
         SEL createSel = NSSelectorFromString(@"createSceneWithDefinition:initialParameters:");
         if (![manager respondsToSelector:createSel]) { hud_mark(@"fb-create-no-sel"); return; }
         hud_mark(@"fb-create-sel-ok");
-        fbScene = ((id(*)(id, SEL, id, id))objc_msgSend)(manager, createSel, def, params);
-        if (!fbScene) { hud_mark(@"fb-create-fail"); return; }
-        hud_mark(@"fb-scene-created");
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            @try {
+                fbSceneBlock = ((id(*)(id, SEL, id, id))objc_msgSend)(manager, createSel, def, params);
+            } @catch (NSException *e) {
+                hud_mark([NSString stringWithFormat:@"fb-create-ex-%@", e.name]);
+            }
+            createDone = YES;
+        });
+        for (int i = 0; i < 30 && !createDone; i++) usleep(100 * 1000);  /* 最多等 3s */
+        fbScene = fbSceneBlock;
+        hud_mark(createDone ? (fbScene ? @"fb-scene-created" : @"fb-create-returned-nil")
+                            : @"fb-create-timeout-3s");
+        if (!fbScene) return;
         /* 存全局防释放 */
         objc_setAssociatedObject([HUDAppDelegate class], "ovFBScene", fbScene, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     } @catch (NSException *e) {
-        hud_mark([NSString stringWithFormat:@"fb-create-ex-%@", e.name]);
+        hud_mark([NSString stringWithFormat:@"fb-create-out-ex-%@", e.name]);
         return;
     }
 

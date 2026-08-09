@@ -59,6 +59,7 @@ build:
 	$(CC) $(CFLAGS) $(LDFLAGS) $(HUD_SOURCES) -o $(HUD_DIR)/$(HUD_NAME)
 	@cp Resources/HUD/Info.plist $(HUD_DIR)/Info.plist
 	@printf 'APPL????' > $(HUD_DIR)/PkgInfo
+	@cp Resources/Info.plist $(APP_DIR)/Info.plist
 	@cp Resources/AppIcon/*.png $(APP_DIR)/
 	@cp Resources/silence.wav $(APP_DIR)/
 	@echo "== build done (App + touch_engine + AilinHUD.app) =="

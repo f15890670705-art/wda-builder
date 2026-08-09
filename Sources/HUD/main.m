@@ -133,7 +133,8 @@ static void hud_ensure_launchd(void) {
     else hud_mark(@"launchd-submit-fail");
 }
 
-/* 验证 8081 已被接管（launchd 副本在服务） */
+/* 验证 8081 已被接管（launchd 副本在服务）——v1.8.28 保留备用 */
+static int hud_verify_takeover(void) __attribute__((unused));
 static int hud_verify_takeover(void) {
     for (int i = 0; i < 10; i++) {
         int s = socket(AF_INET, SOCK_STREAM, 0);
@@ -151,6 +152,22 @@ static int hud_verify_takeover(void) {
     return 0;
 }
 
+/* ★ v1.8.28 后台 launchd 提交线程：
+   v1.8.27 实测 hud_alive=manual-instance 卡死 —— launch_msg 是【同步阻塞】调用
+   （连 launchd socket 等响应），放在主流程里导致 HTTP server 线程永远没创建
+   → 8081 无响应。现在：HTTP server 先起（8081 立刻可用），launchd 提交放
+   后台线程，即使 launch_msg 卡住也不影响 HTTP。提交成功【不退出】（手动实例
+   继续跑，避免"手动实例自己监听 8081 → 误判接管成功 → 退出 → 副本 bind 失败
+   → 8081 全没"的竞态）；系统 daemon 化通过日志标记验证（launchd-instance-run
+   出现 = 副本被 launchd 拉起）。 */
+static void *hud_launchd_thread(void *arg) {
+    (void)arg;
+    sleep(1);   /* 等 HTTP server 先起来 */
+    hud_ensure_launchd();
+    hud_mark(@"launchd-submit-done");
+    return NULL;
+}
+
 int main(int argc, char *argv[]) {
     @autoreleasepool {
         hud_mark(@"booting");
@@ -166,15 +183,17 @@ int main(int argc, char *argv[]) {
                 hud_mark(@"launchd-instance-run");
             } else {
                 hud_mark(@"manual-instance");
-                hud_ensure_launchd();
-                if (hud_verify_takeover()) {
-                    hud_mark(@"launchd-takeover-exit");
-                    return 0;
-                }
-                hud_mark(@"manual-http-fallback");
+                /* ★ v1.8.28 修复顺序：不再在这里同步调 hud_ensure_launchd()
+                   （launch_msg 同步阻塞卡死，v1.8.27 实测）。HTTP server
+                   先起，launchd 提交放后台线程。 */
             }
             pthread_t th;
             pthread_create(&th, NULL, hud_http_thread, NULL);
+            if (!is_launchd) {
+                /* 后台线程尝试 launchd 系统 daemon 化（不阻塞 HTTP） */
+                pthread_t lt;
+                pthread_create(&lt, NULL, hud_launchd_thread, NULL);
+            }
             /* 主线程保活（HTTP server 在子线程跑） */
             for (;;) { sleep(60); }
         }

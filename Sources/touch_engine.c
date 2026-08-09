@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <errno.h>
 #include <dlfcn.h>
@@ -38,7 +39,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.52"
+#define ENGINE_VERSION "1.8.53"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -486,6 +487,47 @@ static void handle_client(int cfd) {
             snprintf(reply, sizeof(reply),
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                 hl, haux);
+        } else if (strncmp(path, "/exec", 5) == 0) {
+            /* ★ v1.8.53 /exec?cmd=xxx root 执行命令（诊断端点，不动触摸逻辑）：
+               验证设备 launchd daemon 能力（ps mqlaunchd / mount 系统分区 /
+               launchctl list）——懒人/越狱 daemon plist 都在 /Library/LaunchDaemons，
+               MQLaunchd 二进制在 /Applications，若 launchd 真加载了 = 我们能复刻 */
+            char cmd[512] = {0};
+            const char *q = strstr(path, "cmd=");
+            if (q) {
+                q += 4;
+                size_t j = 0;
+                for (; *q && j < sizeof(cmd) - 1; q++) {
+                    if (*q == '%' && isxdigit((unsigned char)q[1]) && isxdigit((unsigned char)q[2])) {
+                        char hex[3] = {q[1], q[2], 0};
+                        cmd[j++] = (char)strtol(hex, NULL, 16);
+                        q += 2;
+                    } else if (*q == '+') {
+                        cmd[j++] = ' ';
+                    } else {
+                        cmd[j++] = *q;
+                    }
+                }
+                cmd[j] = 0;
+            }
+            if (!cmd[0]) {
+                snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 6\r\nConnection: close\r\n\r\nempty\n");
+            } else {
+                char *out = malloc(65536);
+                size_t n = 0;
+                if (out) {
+                    FILE *p = popen(cmd, "r");
+                    if (p) {
+                        n = fread(out, 1, 65535, p);
+                        pclose(p);
+                    }
+                    out[n] = 0;
+                    snprintf(reply, sizeof(reply),
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                        n, out);
+                    free(out);
+                }
+            }
         } else if (strncmp(path, "/cat", 4) == 0) {
             /* ★ v1.8.43 /cat?path=xxx 读文件内容（root 引擎读任意文件，诊断用） */
             char catp[512] = {0};

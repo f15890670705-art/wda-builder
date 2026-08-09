@@ -30,7 +30,13 @@ static void hud_mark(NSString *msg) {
 
 static void hud_http_serve(int cfd) {
     char buf[512] = {0};
-    read(cfd, buf, sizeof(buf) - 1);
+    /* ★ v1.8.29 read 加 2s 超时：坏连接（连上不发数据）不阻塞 accept 循环，
+       否则后续连接全部排队 → connect 超时（v1.8.28 实测 8081 一直连不上） */
+    struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+    setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    ssize_t n = read(cfd, buf, sizeof(buf) - 1);
+    if (n <= 0) { close(cfd); return; }
+    buf[n] = 0;
     char body[70000] = {0};
     size_t bl = 0;
     if (strncmp(buf, "GET /log", 8) == 0) {
@@ -59,7 +65,10 @@ static void hud_http_serve(int cfd) {
     int rl = snprintf(resp, sizeof(resp),
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
         bl, body);
-    write(cfd, resp, rl);
+    /* ★ v1.8.29 SIGPIPE 保护：write 到已关闭的连接会 SIGPIPE 直接杀进程
+       （实测 hud_alive=http-up-8081 但 8081 refused = HUD 进程崩溃）。
+       已 signal(SIGPIPE, SIG_IGN)，write 返回 -1/EPIPE 只丢该连接不崩。 */
+    if (write(cfd, resp, rl) < 0) { /* EPIPE 等，忽略 */ }
     close(cfd);
 }
 
@@ -170,6 +179,9 @@ static void *hud_launchd_thread(void *arg) {
 
 int main(int argc, char *argv[]) {
     @autoreleasepool {
+        /* ★ v1.8.29 忽略 SIGPIPE：socket write 到已关闭连接默认 SIGPIPE 杀进程
+           （v1.8.28 实测 HUD 崩溃根因）。 */
+        signal(SIGPIPE, SIG_IGN);
         hud_mark(@"booting");
         /* ★ v1.8.27 系统 daemon 化（照懒人 mqlaunchd 拉起 RootCore）：
            launchd 副本（ppid=1，系统身份）直接跑 HTTP；手动实例提交

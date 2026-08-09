@@ -37,7 +37,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.14"
+#define ENGINE_VERSION "1.8.15"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -742,8 +742,14 @@ static void ensure_hud(void) {
 static int ensure_launchd(void) {
     if (copy_self(INSTALL_PATH) != 0) return -1;
 
-    FILE *pf = fopen(LAUNCHD_PLIST, "w");
-    if (!pf) { LOG("cannot write %s", LAUNCHD_PLIST); return -1; }
+    /* ★ v1.8.15 破局：/Library/LaunchDaemons 在 iOS15+ 系统卷（只读）写不进。
+       launchctl bootstrap system 允许 plist 在任意路径！写 /var/mobile
+       （引擎可写）再 bootstrap system 注册系统 daemon（root 常驻 KeepAlive）。
+       plist 路径改 /var/mobile/com.ailintouch.engine.plist。 */
+    char plist_path[512];
+    snprintf(plist_path, sizeof(plist_path), "/var/mobile/%s.plist", LAUNCHD_LABEL);
+    FILE *pf = fopen(plist_path, "w");
+    if (!pf) { LOG("cannot write %s: %s", plist_path, strerror(errno)); return -1; }
     fprintf(pf,
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
         "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
@@ -754,19 +760,29 @@ static int ensure_launchd(void) {
         "\t<key>RunAtLoad</key>\n\t<true/>\n"
         "\t<key>KeepAlive</key>\n\t<true/>\n"
         "\t<key>UserName</key>\n\t<string>root</string>\n"
+        "\t<key>EnvironmentVariables</key>\n\t<dict>\n"
+        "\t\t<key>PATH</key>\n\t\t<string>/usr/bin:/bin:/usr/sbin:/sbin</string>\n"
+        "\t</dict>\n"
         "</dict>\n</plist>\n", LAUNCHD_LABEL, INSTALL_PATH);
     fclose(pf);
-    LOG("wrote %s", LAUNCHD_PLIST);
+    LOG("wrote %s", plist_path);
 
-    /* iOS 14 用 launchctl load -w */
+    /* iOS 14+ 用 launchctl bootstrap system（plist 任意路径）；
+       老系统 fallback launchctl load -w */
     pid_t pid;
-    char *argv[] = {"launchctl", "load", "-w", LAUNCHD_PLIST, NULL};
+    char *argv[] = {"launchctl", "bootstrap", "system", plist_path, NULL};
     int rc = posix_spawn(&pid, "/bin/launchctl", NULL, NULL, argv, environ);
-    if (rc != 0) { LOG("launchctl spawn failed: %s", strerror(rc)); return -1; }
+    if (rc != 0) {
+        LOG("launchctl bootstrap spawn failed: %s", strerror(rc));
+        /* fallback: launchctl load -w（老 API） */
+        char *argv2[] = {"launchctl", "load", "-w", plist_path, NULL};
+        rc = posix_spawn(&pid, "/bin/launchctl", NULL, NULL, argv2, environ);
+        if (rc != 0) { LOG("launchctl load spawn failed: %s", strerror(rc)); return -1; }
+    }
     int st = 0;
     waitpid(pid, &st, 0);
     int erc = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
-    LOG("launchctl load rc=%d", erc);
+    LOG("launchctl bootstrap rc=%d", erc);
     return 0;
 }
 

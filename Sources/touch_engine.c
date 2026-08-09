@@ -37,7 +37,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.15"
+#define ENGINE_VERSION "1.8.16"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -739,13 +739,39 @@ static void ensure_hud(void) {
 }
 
 /* 安装 launchd 守护进程（开机自启 + KeepAlive 崩溃重启） */
+/* ---------- launch_msg 声明（launch.h 老 API，iOS15+ SDK 已无头文件，手动声明） ----------
+   launch_msg 直接连 launchd 的 socket 提交 job，不 exec 外部二进制 ——
+   绕开 arm64e launchctl 在 arm64 进程 exec 失败（v1.8.15 实测 Bad executable）。 */
+typedef struct _launch_data *launch_data_t;
+extern launch_data_t launch_msg(launch_data_t);
+extern launch_data_t launch_data_alloc(int);
+extern launch_data_t launch_data_free(launch_data_t);
+extern void launch_data_dict_insert(launch_data_t, launch_data_t, const char *);
+extern launch_data_t launch_data_new_string(const char *);
+extern launch_data_t launch_data_new_bool(int);
+#define LAUNCH_DATA_DICTIONARY 3
+
 static int ensure_launchd(void) {
     if (copy_self(INSTALL_PATH) != 0) return -1;
 
-    /* ★ v1.8.15 破局：/Library/LaunchDaemons 在 iOS15+ 系统卷（只读）写不进。
-       launchctl bootstrap system 允许 plist 在任意路径！写 /var/mobile
-       （引擎可写）再 bootstrap system 注册系统 daemon（root 常驻 KeepAlive）。
-       plist 路径改 /var/mobile/com.ailintouch.engine.plist。 */
+    /* ★ v1.8.16 首选 launch_msg 提交系统 daemon job（root 常驻 KeepAlive）。
+       launchctl bootstrap 因 arm64e exec 失败（v1.8.15 实测 Bad executable），
+       改直接连 launchd socket（libSystem 内置，无需 exec 外部二进制）。 */
+    launch_data_t msg = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+    if (msg) {
+        launch_data_dict_insert(msg, launch_data_new_string(INSTALL_PATH), "program");
+        launch_data_dict_insert(msg, launch_data_new_bool(1), "run_at_load");
+        launch_data_dict_insert(msg, launch_data_new_bool(1), "keep_alive");
+        launch_data_t resp = launch_msg(msg);
+        if (resp) {
+            LOG("launch_msg submit ok (daemon installed)");
+            launch_data_free(resp);
+            return 0;
+        }
+        LOG("launch_msg failed, fallback exec launchctl");
+    }
+
+    /* 写 plist 到 /var/mobile（引擎可写），再用 launchctl（arm64e 可能失败） */
     char plist_path[512];
     snprintf(plist_path, sizeof(plist_path), "/var/mobile/%s.plist", LAUNCHD_LABEL);
     FILE *pf = fopen(plist_path, "w");
@@ -767,14 +793,12 @@ static int ensure_launchd(void) {
     fclose(pf);
     LOG("wrote %s", plist_path);
 
-    /* iOS 14+ 用 launchctl bootstrap system（plist 任意路径）；
-       老系统 fallback launchctl load -w */
+    /* launchctl bootstrap system（plist 任意路径）；老系统 fallback load -w */
     pid_t pid;
     char *argv[] = {"launchctl", "bootstrap", "system", plist_path, NULL};
     int rc = posix_spawn(&pid, "/bin/launchctl", NULL, NULL, argv, environ);
     if (rc != 0) {
         LOG("launchctl bootstrap spawn failed: %s", strerror(rc));
-        /* fallback: launchctl load -w（老 API） */
         char *argv2[] = {"launchctl", "load", "-w", plist_path, NULL};
         rc = posix_spawn(&pid, "/bin/launchctl", NULL, NULL, argv2, environ);
         if (rc != 0) { LOG("launchctl load spawn failed: %s", strerror(rc)); return -1; }

@@ -237,28 +237,13 @@
        后台点击留待引擎侧命中检测方案。 */
 
     /* ★ v1.8.20 心跳简化：30s 一次，只上报 hb-alive，【不再做 SBS 注册】。
-       SBS 注册交给 applicationDidBecomeActive（回前台时 cid 稳定后注册一次），
-       心跳重复注册是浪费（v1.8.12 实测每次取 cid 都不同=注册也白注册）。 */
+       SBS 注册交给前台激活（scene 通知，v1.8.46）——cid 稳定后注册一次。
+       ★ v1.8.46 删除心跳里的 detach 兜底：v1.8.40/41 实测 detach 丢 cid
+       （脱离 scene 后 WindowServer 回收 context），且 daemon 化 App 的
+       applicationDidBecomeActive 不触发 → detach 后回前台永远恢复不了。
+       切后台不做任何操作，让 SBS 托管自己撑；回前台 scene 通知重新注册。 */
     self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer *t) {
         [self reportToEngine:@"hb-alive"];
-        /* ★ v1.8.41 心跳兜底检测：检查【窗口 scene 的激活状态】（不是
-           applicationState！v1.8.40 实测 daemon 化 App 的 applicationState
-           永远 active，willResignActive/didEnterBackground 全不触发——
-           但系统按 scene 状态隐藏窗口）。scene 非 ForegroundActive 就 detach。 */
-        if (self.floatingWindow) {
-            BOOL needDetach = NO;
-            @try {
-                UIWindowScene *ws = self.floatingWindow.windowScene;
-                if (ws && ws.activationState != UISceneActivationStateForegroundActive) {
-                    needDetach = YES;
-                }
-            } @catch (NSException *e) {
-                needDetach = YES;
-            }
-            if (needDetach) {
-                [self detachBallFromScene];
-            }
-        }
     }];
 
     /* ★ v1.8.13 删除 hiddenKeepTimer：v1.8.12 实测 reg-ok 的 contextID 每
@@ -274,9 +259,11 @@
 
     [self reportToEngine:@"ball-shown"];
 
-    /* ★ v1.8.41 监听 UIScene 后台/失活通知（即时 detach，不等 30s 心跳）：
-       daemon 化 App 的 applicationState 永远 active、生命周期回调不触发
-       （v1.8.40 实测），但 scene 的通知会发（系统按 scene 状态管理窗口）。 */
+    /* ★ v1.8.41 监听 scene 后台/失活通知 —— ★ v1.8.46 只打点不再 detach：
+       v1.8.40/41 实测 detach 丢 cid 无效（脱离 scene 后 WindowServer 回收
+       context），且 daemon 化 App 的 applicationDidBecomeActive 不触发导致
+       detach 后回前台无法恢复（用户铁证"切一次后台球再也不显示"）。
+       切后台不动窗口（SBS 托管自己撑），回前台 scene 激活通知重新注册。 */
     [[NSNotificationCenter defaultCenter] removeObserver:self
         name:UISceneDidEnterBackgroundNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self
@@ -287,12 +274,32 @@
     [[NSNotificationCenter defaultCenter] addObserver:self
         selector:@selector(sceneDidGoBackground:)
         name:UISceneWillDeactivateNotification object:nil];
+
+    /* ★ v1.8.46 回前台恢复（daemon 化 App 的 applicationDidBecomeActive 不触发，
+       但 scene 激活通知会发）：attach 回 scene + 重新 SBS 注册。 */
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+        name:UISceneWillEnterForegroundNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+        selector:@selector(sceneWillComeForeground:)
+        name:UISceneWillEnterForegroundNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+        name:UISceneDidActivateNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+        selector:@selector(sceneWillComeForeground:)
+        name:UISceneDidActivateNotification object:nil];
 }
 
-/* ★ v1.8.41 scene 进入后台/失活 → 立即 detach（幂等） */
+/* ★ v1.8.46 scene 进入后台/失活 → 只打点，不 detach（v1.8.40/41 实测 detach
+   丢 cid 无效；切后台 SBS 托管自然失效由系统决定，回前台 scene 通知恢复） */
 - (void)sceneDidGoBackground:(NSNotification *)note {
-    [self reportToEngine:@"scene-bg-detach"];
-    [self detachBallFromScene];
+    [self reportToEngine:@"scene-bg"];
+}
+
+/* ★ v1.8.46 scene 回前台/激活 → attach 回 scene + 重新 SBS 注册（恢复球） */
+- (void)sceneWillComeForeground:(NSNotification *)note {
+    [self reportToEngine:@"scene-fg-recover"];
+    [self attachBallToScene];
+    [self registerToSpringBoardWithRetry];
 }
 
 - (void)hideFloatingBall {
@@ -301,6 +308,10 @@
         name:UISceneDidEnterBackgroundNotification object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self
         name:UISceneWillDeactivateNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+        name:UISceneWillEnterForegroundNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+        name:UISceneDidActivateNotification object:nil];
     [self.hbTimer invalidate];
     self.hbTimer = nil;
     [self unregisterFromSpringBoard];

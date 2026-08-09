@@ -97,20 +97,24 @@ int main(int argc, char *argv[]) {
     @autoreleasepool {
         signal(SIGPIPE, SIG_IGN);
         hud_mark(@"booting");
-        /* ★ v1.8.33 bootrun 模式（引擎/App spawn 时传）：只写日志 + 提交
-           launchd + 保活。无 8081 HTTP（用户指示：引擎直接读日志文件）。
-           launchd 副本（ppid==1，系统身份）直接保活 = 系统 daemon 化成功。 */
+        /* ★ v1.8.34 bootrun 模式：直接调 UIApplicationMain！
+           HUDAppDelegate didFinish 里建不绑 scene 的窗口 + 球 + FBScene +
+           binder + SBS 注册（v1.8.1 写的逻辑一直在，只是 main 没调
+           UIApplicationMain 所以从没跑过）。
+           独立 bundle + legacy（无 SceneManifest）→ UIApplicationMain 不等
+           scene 连接 → 不卡 booting（v1.8.1 当时因打包位置错误没验证过，
+           这次嵌套打包正确，真实验证）。
+           HUD 是独立 root 进程 → 窗口不绑 scene → 切后台球不消失（懒人
+           RootCore 机制）。 */
         if (argc >= 2 && strcmp(argv[1], "bootrun") == 0) {
-            int is_launchd = (getppid() == 1);
-            if (is_launchd) {
-                hud_mark(@"launchd-instance-run");
-            } else {
-                hud_mark(@"manual-instance");
-                pthread_t lt;
-                pthread_create(&lt, NULL, hud_launchd_thread, NULL);
-            }
-            /* 主线程保活 */
-            for (;;) { sleep(60); }
+            hud_mark(@"ui-main-start");
+            /* 后台线程尝试 launchd 系统 daemon 化（launch_msg 卡住无副作用） */
+            pthread_t lt;
+            pthread_create(&lt, NULL, hud_launchd_thread, NULL);
+            int rc = UIApplicationMain(argc, argv, nil,
+                NSStringFromClass([HUDAppDelegate class]));
+            hud_mark([NSString stringWithFormat:@"exited-%d", rc]);
+            return rc;
         }
         int rc = UIApplicationMain(argc, argv, nil,
             NSStringFromClass([HUDAppDelegate class]));

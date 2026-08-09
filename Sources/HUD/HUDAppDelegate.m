@@ -17,10 +17,26 @@
 #import "HUDBall.h"
 #import <objc/message.h>
 
-/* 诊断辅助：写 /tmp/ailintouch_hud.alive，引擎 /hud 端点远程读 */
+/* 诊断辅助：写 /tmp/ailintouch_hud.alive（引擎 /hud 可读）
+   ★ v1.8.34 双写 /tmp/ailintouch_hud.log（引擎 /log?src=hud 可读，带时间戳） */
 static void hud_mark(NSString *msg) {
     [msg writeToFile:@"/tmp/ailintouch_hud.alive"
           atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    @autoreleasepool {
+        NSDateFormatter *df = [NSDateFormatter new];
+        df.dateFormat = @"HH:mm:ss.SSS";
+        NSString *line = [NSString stringWithFormat:@"[%@] [hud] %@\n",
+                          [df stringFromDate:[NSDate date]], msg];
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/ailintouch_hud.log"];
+        if (!fh) {
+            [[NSFileManager defaultManager] createFileAtPath:@"/tmp/ailintouch_hud.log"
+                                                    contents:nil attributes:nil];
+            fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/ailintouch_hud.log"];
+        }
+        [fh seekToEndOfFile];
+        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh closeFile];
+    }
 }
 
 @implementation HUDAppDelegate

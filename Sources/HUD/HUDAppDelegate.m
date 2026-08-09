@@ -281,21 +281,28 @@ static UIWindow *g_manualWindow = nil;
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     hud_mark(@"appdelegate");
 
-    /* ★ v1.8.44 scene-based：窗口/球/SBS 注册全部交给 HUDSceneDelegate
-       willConnect（窗口 initWithWindowScene: 绑 scene —— 懒人 RootCore 铁证）。
-       兜底：spawn 进程若无 scene 创建（willConnect 不触发），3s 后手动建球
-       （manualInstallBall 裸窗口 + FBScene/binder + SBS 注册，v1.8.36 姿势）。 */
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+    /* ★ v1.8.45 立即手动建球（不等 willConnect）：
+       v1.8.44 实测（17:39 日志铁证）：scene-based UIApplicationMain 不卡
+       （appdelegate 执行），但 scene:willConnect 不触发 —— spawn 的独立进程
+       UIKit 不会主动建 scene，且 scene-based 无 scene 可能被系统 kill
+       （3s 兜底都没机会打标，hud.log 停在 appdelegate）。
+       → 必须像懒人一样【主动 createSceneWithDefinition 创建二进制 FBScene】。
+       manualInstallBall = 建窗口（有 scene 绑 scene）+ FBScene createScene
+       （v1.8.42 失败因裸进程无 UIApplication；现在有 UIApplication 环境，
+       createScene 可能成功）+ UIRootWindowScenePresentationBinder 绑系统
+       root window + SBS 注册。全部 @try 保护，任何一步失败不阻塞进程。 */
+    [HUDAppDelegate manualInstallBall];
+
+    /* 二次兜底：2.5s 后若窗口没建成功（FBScene/binder 全失败），再试一次手动建球 */
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         @try {
-            if ([[UIApplication sharedApplication] connectedScenes].count == 0) {
-                hud_mark(@"no-scene-fallback-manual");
+            if (g_manualWindow == nil) {
+                hud_mark(@"retry-manual-install");
                 [HUDAppDelegate manualInstallBall];
-            } else {
-                hud_mark(@"scene-ok");
             }
         } @catch (NSException *e) {
-            hud_mark([NSString stringWithFormat:@"scene-check-ex-%@", e.name]);
+            hud_mark([NSString stringWithFormat:@"retry-ex-%@", e.name]);
         }
     });
 

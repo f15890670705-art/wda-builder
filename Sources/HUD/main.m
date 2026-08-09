@@ -21,6 +21,9 @@
 
 extern char **environ;   /* v1.8.47 posix_spawn launchctl 用 */
 
+/* hud_mark 定义在文件后部（static），这里前置声明供前面使用 */
+static void hud_mark(NSString *msg);
+
 /* ★ v1.8.60 照开源 Letterpress TRHudMain 私有 API（dlsym 动态解析，避免
    构建机链接私有 framework 失败）。这些是 iOS 悬浮窗的终极启动姿势：
    GSInitialize + BKSDisplayServicesStart + UIApplicationInitialize +

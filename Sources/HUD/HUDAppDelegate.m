@@ -17,6 +17,7 @@
 #import "HUDBall.h"
 #import <objc/message.h>
 #import <dlfcn.h>
+#import <QuartzCore/QuartzCore.h>   /* CAContext */
 
 /* ★ v1.8.60 照开源 Letterpress TRHudMainWindow 完整 override（TrollStore 悬浮窗
    显示关键）：_isSystemWindow=YES 让系统当系统窗口；_isWindowServerHostingManaged=NO

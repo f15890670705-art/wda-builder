@@ -73,6 +73,8 @@
 @property (nonatomic, strong) FloatingBall *ball;
 @property (nonatomic, strong) NSTimer *touchTimer;
 @property (nonatomic, strong) NSTimer *hbTimer;      /* 心跳：定期重注册 + 上报 App 存活（诊断） */
+@property (nonatomic, strong) NSTimer *hiddenKeepTimer; /* v1.8.4 0.5s 强制窗口可见 */
+@property (nonatomic, strong) NSTimer *sceneFollowTimer; /* v1.8.4 1s 跟随前台 scene */
 @property (nonatomic, assign) unsigned int cachedCid;  /* 同一窗口 contextID 不变，拿到一次缓存复用 */
 @end
 
@@ -121,20 +123,33 @@
     CGRect full = windowScene ? windowScene.coordinateSpace.bounds : [UIScreen mainScreen].bounds;
     CGFloat y = full.size.height / 2 - size;
 
-    /* ★ v1.7.3 综合方案（用户铁证"二进制 scene" + 懒人符号铁证）：
-       懒人 RootService 含 FBSceneManager/FBSMutableSceneDefinition/
-       createSceneWithDefinition/UIRootWindowScenePresentationBinder 符号！
-       正确架构 = 窗口【绑 UIKit scene】（拿 contextID，v1.6.4 验证
-       _contextId=420595175 有效）+ UIRootWindowScenePresentationBinder
-       addScene:windowScene._fbScene（把二进制 FBScene 绑到系统 root window
-       层 → 窗口挂在 SpringBoard 系统 scene 上，不随 App scene 挂起）。
-       v1.6.2 已验证 binder 传 _fbScene 不异常；v1.6.9 已删切后台隐藏；
-       v1.7.0 心跳注册自动用新 cid。全部组合。 */
-    self.floatingWindow = [[FloatingBallWindow alloc] initWithWindowScene:windowScene];
+    /* ★ v1.8.4 用户铁证"懒人是不是一直在获取前台的scene" + 懒人符号铁证：
+       懒人 RootService/RootCore 都含 @_OBJC_CLASS_$_UIRootSceneWindow +
+       UIRootWindowScenePresentationBinder + connectedScenes ——
+       懒人悬浮球窗口【优先绑定系统 root window scene】（UIRootSceneWindow
+       持有的 scene，永远存在、永远激活）→ 不随 App 的 main scene 挂起 →
+       切后台球不消失！v1.8.3 绑 main scene 切后台被系统强制隐藏的根因。
+       私有 API: [UIScreen mainScreen] 的 _rootWindowScene（UIWindowScene）。 */
+    UIWindowScene *bindScene = windowScene;
+    @try {
+        id rootScene = [[UIScreen mainScreen] valueForKey:@"_rootWindowScene"];
+        if (rootScene && [rootScene isKindOfClass:[UIWindowScene class]]) {
+            bindScene = (UIWindowScene *)rootScene;
+            [self reportToEngine:@"root-scene-ok"];
+        } else {
+            [self reportToEngine:@"root-scene-nil-fallback-main"];
+        }
+    } @catch (NSException *e) {
+        [self reportToEngine:@"root-scene-ex-fallback-main"];
+    }
+
+    /* ★ v1.6.0 验证：必须 initWithWindowScene: 拿有效 _contextId（v1.6.0 前
+       initWithFrame + 手动赋值 windowScene → cid 垃圾值 reg-ok-3837087202）。 */
+    self.floatingWindow = [[FloatingBallWindow alloc] initWithWindowScene:bindScene];
     if (!self.floatingWindow) {
         /* 兜底：scene 为 nil 时退回旧姿势 */
         self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
-        self.floatingWindow.windowScene = windowScene;
+        self.floatingWindow.windowScene = bindScene;
     }
     self.floatingWindow.windowLevel = 20000002;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
@@ -160,9 +175,10 @@
        FBSceneManager + createSceneWithDefinition 符号 —— 窗口的二进制
        FBScene（windowScene._fbScene）addScene 到 binder → 窗口绑定到
        系统 root window scene → 全局显示且不随 App scene 挂起。
-       v1.6.5 误判"懒人没有 binder"删除是错的（binder 字符串一直在懒人里）。 */
-    if (windowScene) {
-        [self bindToRootWindowScene:windowScene];
+       ★ v1.8.4 传 bindScene（系统 root scene 优先，懒人 UIRootSceneWindow
+       符号铁证：球绑系统 root window scene 才真正不随 App 生命周期）。 */
+    if (bindScene) {
+        [self bindToRootWindowScene:bindScene];
     }
 
     /* 立即注册（若 contextID 尚未分配会失败，走 retry 补齐） */
@@ -190,6 +206,42 @@
         if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
         [self registerToSpringBoardWithRetry];
     }];
+
+    /* ★ v1.8.4 双保险（用户铁证：切后台球立即消失 = v1.8.3 绑 main scene
+       被系统强制 hidden）：
+       ① hiddenKeepTimer(0.5s)：窗口被系统改 hidden=YES 立即 setHidden:NO 复活。
+          NSRunLoopCommonModes 保证后台模式也触发（NSTimer 默认 default mode
+          在后台 runloop 可能不回调）。懒人 daemon 窗口永活，我们前台 App
+          必须主动维持。 */
+    self.hiddenKeepTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) {
+        if (self.floatingWindow && self.floatingWindow.hidden) {
+            self.floatingWindow.hidden = NO;
+            [self reportToEngine:@"hidden-revive"];
+        }
+    }];
+    [[NSRunLoop mainRunLoop] addTimer:self.hiddenKeepTimer forMode:NSRunLoopCommonModes];
+
+    /* ② sceneFollowTimer(1s)：跟随当前前台 scene（用户直觉"懒人一直在获取
+       前台的scene"）。若 root scene 绑定失败（bindScene=main scene），
+       动态把球窗口切到前台激活的 scene；切后台后自己进程无 active scene
+       则不动作（保留 root scene 方案为主，此为兜底）。 */
+    self.sceneFollowTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
+        if (!self.floatingWindow) return;
+        UIWindowScene *active = nil;
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+            if ([s isKindOfClass:[UIWindowScene class]] &&
+                s.activationState == UISceneActivationStateForegroundActive) {
+                active = (UIWindowScene *)s;
+                break;
+            }
+        }
+        if (active && self.floatingWindow.windowScene != active) {
+            self.floatingWindow.windowScene = active;
+            [self reportToEngine:@"scene-follow"];
+        }
+    }];
+    [[NSRunLoop mainRunLoop] addTimer:self.sceneFollowTimer forMode:NSRunLoopCommonModes];
+
     [self reportToEngine:@"ball-shown"];
 }
 
@@ -220,6 +272,10 @@
     self.touchTimer = nil;
     [self.hbTimer invalidate];
     self.hbTimer = nil;
+    [self.hiddenKeepTimer invalidate];
+    self.hiddenKeepTimer = nil;
+    [self.sceneFollowTimer invalidate];
+    self.sceneFollowTimer = nil;
     [self unregisterFromSpringBoard];
     self.floatingWindow.hidden = YES;
     self.floatingWindow = nil;

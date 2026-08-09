@@ -38,7 +38,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.42"
+#define ENGINE_VERSION "1.8.43"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -486,6 +486,30 @@ static void handle_client(int cfd) {
             snprintf(reply, sizeof(reply),
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                 hl, haux);
+        } else if (strncmp(path, "/cat", 4) == 0) {
+            /* ★ v1.8.43 /cat?path=xxx 读文件内容（root 引擎读任意文件，诊断用） */
+            char catp[512] = {0};
+            if (sscanf(path, "/cat?path=%511[^\r\n]", catp) != 1 || catp[0] != '/') {
+                snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\nbad path\n");
+            } else {
+                FILE *cf = fopen(catp, "r");
+                if (!cf) {
+                    char emsg[256];
+                    snprintf(emsg, sizeof(emsg), "error: cannot open %s (%s)\n", catp, strerror(errno));
+                    size_t el = strlen(emsg);
+                    snprintf(reply, sizeof(reply),
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                        el, emsg);
+                } else {
+                    char cbuf[8192] = {0};
+                    size_t cn = fread(cbuf, 1, sizeof(cbuf) - 1, cf);
+                    fclose(cf);
+                    cbuf[cn] = 0;
+                    snprintf(reply, sizeof(reply),
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                        cn, cbuf);
+                }
+            }
         } else if (strncmp(path, "/dir", 4) == 0) {
             /* /dir?path=/var/mobile/ailintouch  列出目录（root 引擎读，App 免 root） */
             char dirp[512] = {0};

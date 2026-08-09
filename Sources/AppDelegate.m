@@ -563,7 +563,9 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     __weak typeof(self) ws = self;
     /* ★ v1.5.2: 悬浮球点击回调 → 引擎命令（球在 App 内，FloatingWindowManager 管理）。
        onTap 由引擎 HID 全局触摸监控驱动（引擎写 /tmp/ailintouch.touch，
-       App 轮询命中球区域触发），后台也能点。 */
+       App 轮询命中球区域触发），后台也能点。
+       ★ v1.8.61 主 App 球已关闭（ballEnabled=NO，showFloatingBallInScene 直接
+       return）——全局球由 AilinHUD 独立进程负责。onTap 保留但不再被触发。 */
     [FloatingWindowManager shared].onTap = ^{
         /* 点击悬浮球 → 通知引擎（后续可扩展为展开菜单/执行命令） */
         [ws forwardToEngine:@"BALL_TAP\n"];
@@ -577,12 +579,9 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
        ★ v1.8.6 阶段4：严格【等引擎就绪后再建球】——分先后分时间
        （用户铁证"不分先后一股脑全启动"）。先等 0.5s 让 scene 稳定
        （懒人 setupHUDWindow 后 dispatch_after(0.5s) 时序），再等引擎
-       HTTP 就绪（waitEngineReadyThenShowBall 轮询），最后建球。 */
+       HTTP 就绪（waitEngineReadyThenShowBall 轮询），最后建球。
+       ★ v1.8.61 主 App 球关闭（ballEnabled=NO），不再调用建球流程。 */
     [self appTrace:@"phase-3 scene-ready"];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        [self waitEngineReadyThenShowBall:scene try:0];
-    });
 
     self.serviceVC.onTapStart = ^{
         BOOL wasRunning = [ws engineAlive];

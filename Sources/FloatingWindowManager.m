@@ -143,6 +143,13 @@
    → _contextId 拿不到有效值（设备日志 reg-ok-3837087202 每次不同的大数=垃圾）！
    懒人窗口：MyCustomWindow = [[MyCustomWindow alloc] initWithWindowScene:scene] */
 - (void)showFloatingBallInScene:(UIWindowScene *)windowScene {
+    /* ★ v1.8.61 主 App 内部球关闭：全局球由 AilinHUD 独立进程负责
+       （TRHudMain plugin 模式 + SBS 注册，切后台不消失）。
+       这里直接 return，所有建球入口（sceneReady / 前台恢复）都不再建球。 */
+    if (!self.ballEnabled) {
+        [self reportToEngine:@"ball-disabled-in-app"];
+        return;
+    }
     if (self.floatingWindow) return;
 
     CGFloat size = 56;                          /* 球尺寸 */

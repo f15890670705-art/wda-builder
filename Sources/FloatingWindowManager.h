@@ -9,6 +9,10 @@ NS_ASSUME_NONNULL_BEGIN
 @interface FloatingWindowManager : NSObject
 @property (nonatomic, copy) void (^onTap)(void);
 @property (nonatomic, strong) UIWindow *floatingWindow;
+/* ★ v1.8.61 主 App 内部球开关（默认 NO）：全局球由 AilinHUD 独立进程
+   （TRHudMain plugin 模式 + SBS 注册）负责，主 App 只显示控制面板 UI。
+   置 YES 可恢复主 App 球（兜底用）。 */
+@property (nonatomic, assign) BOOL ballEnabled;
 
 + (instancetype)shared;
 - (void)showFloatingBall;

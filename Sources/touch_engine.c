@@ -38,7 +38,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.30"
+#define ENGINE_VERSION "1.8.31"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -105,6 +105,17 @@ static int log_read_lines(const char *path, char lines[][LOG_MAX_LEN], int max) 
     }
     free(buf);
     return cnt;
+}
+
+/* ★ v1.8.31 单文件日志直接 dump 到 out（src= 分路用） */
+static size_t log_dump_file(const char *path, char *out, size_t cap) {
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    size_t n = fread(out, 1, cap - 1, f);
+    fclose(f);
+    if (n > 0 && out[n-1] != '\n') out[n++] = '\n';
+    out[n] = 0;
+    return n;
 }
 
 /* 创建数据区目录结构（launchd 实例 = root 无 sandbox 可建；App spawn 实例 sandbox 内失败则日志落 /tmp） */
@@ -435,23 +446,38 @@ static void handle_client(int cfd) {
                 snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{\"ok\":false}");
             }
         } else if (strncmp(path, "/log", 4) == 0) {
-            /* ★ v1.8.14 日志整理：app log 与引擎日志【按时间戳归并排序】输出，
-               统一 [HH:mm:ss.SSS] 格式，解决 v1.8.13 及之前的时间倒挂
-               （app 流水在前、引擎日志在后，12:42 后面跟着 12:50）。
-               ★ v1.8.30 加第三路：AilinHUD 日志（/tmp/ailintouch_hud.log）
-               —— 用户指示"用 touch 引擎读取 HUD 的日志文件"：8081 一直
-               连不上（AilinHUD 自身 HTTP server 不稳），改由稳定的 root
-               引擎合并暴露，HUD 状态从 8080/log 直接可查。 */
-            int anc = log_read_lines("/tmp/ailintouch_app.log", log_app_lines, LOG_MAX_LINES);
-            int hnc = log_read_lines("/tmp/ailintouch_hud.log", log_hud_lines, LOG_MAX_LINES);
-            int enc = log_read_lines(LOG_PATH, log_eng_lines, LOG_MAX_LINES);
-            if (enc == 0) enc = log_read_lines(LOG_PATH_TMP, log_eng_lines, LOG_MAX_LINES);
-            /* 三路归并（各自按时间有序） */
+            /* ★ v1.8.31 用户指示：日志分路取，不要强行组合 —— ?src= 参数：
+                 /log           → 三路归并（默认全部，按时间序）
+                 /log?src=app   → 只 App 日志
+                 /log?src=engine→ 只引擎日志
+                 /log?src=hud   → 只 HUD 日志 */
+            const char *sp = strstr(path, "src=");
+            char srcv[16] = "all";
+            if (sp) {
+                sp += 4;
+                size_t sl = 0;
+                while (sp[sl] && sp[sl] != '&' && sp[sl] != ' ' && sl < 15) sl++;
+                memcpy(srcv, sp, sl);
+                srcv[sl] = 0;
+            }
             char *out = malloc(131072);
             if (!out) {
                 snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\n\n");
             } else {
             size_t ol = 0;
+            if (strcmp(srcv, "app") == 0) {
+                ol = log_dump_file("/tmp/ailintouch_app.log", out, 131072);
+            } else if (strcmp(srcv, "engine") == 0) {
+                ol = log_dump_file(LOG_PATH, out, 131072);
+                if (ol == 0) ol = log_dump_file(LOG_PATH_TMP, out, 131072);
+            } else if (strcmp(srcv, "hud") == 0) {
+                ol = log_dump_file("/tmp/ailintouch_hud.log", out, 131072);
+            } else {
+            /* 三路归并（各自按时间有序，v1.8.14/1.8.30） */
+            int anc = log_read_lines("/tmp/ailintouch_app.log", log_app_lines, LOG_MAX_LINES);
+            int hnc = log_read_lines("/tmp/ailintouch_hud.log", log_hud_lines, LOG_MAX_LINES);
+            int enc = log_read_lines(LOG_PATH, log_eng_lines, LOG_MAX_LINES);
+            if (enc == 0) enc = log_read_lines(LOG_PATH_TMP, log_eng_lines, LOG_MAX_LINES);
             int i = 0, j = 0, k = 0;
             while ((i < anc || j < enc || k < hnc) && ol < 131072 - LOG_MAX_LEN) {
                 /* 三路里取时间最早的一条 */
@@ -471,6 +497,7 @@ static void handle_client(int cfd) {
                 out[ol++] = '\n';
             }
             out[ol] = 0;
+            }
             /* 取尾部 400 行 */
             char *tail = out + ol;
             int lines = 0;

@@ -37,7 +37,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.16"
+#define ENGINE_VERSION "1.8.17"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -754,11 +754,13 @@ extern launch_data_t launch_data_new_bool(int);
 static int ensure_launchd(void) {
     if (copy_self(INSTALL_PATH) != 0) return -1;
 
-    /* ★ v1.8.16 首选 launch_msg 提交系统 daemon job（root 常驻 KeepAlive）。
-       launchctl bootstrap 因 arm64e exec 失败（v1.8.15 实测 Bad executable），
-       改直接连 launchd socket（libSystem 内置，无需 exec 外部二进制）。 */
+    /* ★ v1.8.17 首选 launch_msg 提交系统 daemon job（root 常驻 KeepAlive）。
+       launchctl bootstrap 因 arm64e exec 失败（v1.8.15 实测 Bad executable）。
+       ★ 修复：必须带 label（launch_msg 老协议要求 label，缺了 job 不注册
+       → handoff 退出后 launchd 无 job 可拉起 → 引擎彻底消失 8080 拒连！） */
     launch_data_t msg = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
     if (msg) {
+        launch_data_dict_insert(msg, launch_data_new_string(LAUNCHD_LABEL), "label");
         launch_data_dict_insert(msg, launch_data_new_string(INSTALL_PATH), "program");
         launch_data_dict_insert(msg, launch_data_new_bool(1), "run_at_load");
         launch_data_dict_insert(msg, launch_data_new_bool(1), "keep_alive");
@@ -840,10 +842,33 @@ int main(int argc, char *argv[]) {
         usleep(200 * 1000);
         int rc = ensure_launchd();
         if (rc == 0) {
-            LOG("handoff to launchd, exiting");
-            return 0;
+            /* ★ v1.8.17 双保险：验证 launchd 副本真的接管 8080 才退出！
+               launch_msg 缺 label（v1.8.16）job 没注册 → handoff 退出后
+               引擎彻底消失 8080 拒连。现在验证 3 秒内 8080 可连才退出，
+               否则继续手动实例跑（保证引擎永存）。 */
+            int takeover = 0;
+            for (int i = 0; i < 10; i++) {
+                int s = socket(AF_INET, SOCK_STREAM, 0);
+                struct sockaddr_in sa = {0};
+                sa.sin_family = AF_INET;
+                sa.sin_port = htons(HTTP_PORT);
+                sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                if (connect(s, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
+                    close(s);
+                    takeover = 1;
+                    break;
+                }
+                close(s);
+                usleep(300 * 1000);
+            }
+            if (takeover) {
+                LOG("launchd takeover ok, exiting");
+                return 0;
+            }
+            LOG("launchd NOT up, run as manual instance");
+        } else {
+            LOG("launchd install failed, run as manual instance");
         }
-        LOG("launchd install failed, run as manual instance");
     }
 
     kill_old_instance();  /* 清旧实例（launchd 拉起时清理残留） */

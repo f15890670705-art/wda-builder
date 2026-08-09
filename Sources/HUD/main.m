@@ -2,26 +2,25 @@
 // AilinHUD main.m
 //
 // 独立进程（照懒人 RootCore 架构）。
-// ★ v1.8.25 用户指示：先在 AilinHUD 里搞 HTTP server 实现日志，跑通后再管
-//   touch 引擎。bootrun 模式 = 纯 HTTP server（不调 UIApplicationMain，
-//   不会卡 booting），监听 8081 提供 /log（读 App 日志文件）+ /hud。
-//   HTTP 跑通验证 AilinHUD 独立进程能起来，之后再加界面/悬浮球。
+// ★ v1.8.33 用户指示：不要 8081 HTTP server——touch 引擎(8080)直接读 HUD
+//   写的日志文件即可。bootrun 模式 = 只做三件事：
+//   ① 写状态日志 /tmp/ailintouch_hud.log（+ alive 标记），引擎 /log?src=hud 读
+//   ② 后台线程尝试 launchd 系统 daemon 化（launch_msg，不阻塞）
+//   ③ 主线程保活
+//   后续加悬浮球/界面时在 bootrun 分支扩展（或走 UIApplicationMain）。
 //
 #import <UIKit/UIKit.h>
-#import <sys/socket.h>
-#import <netinet/in.h>
 #import <pthread.h>
 #import <mach-o/dyld.h>
 #import <sys/stat.h>
+#import <signal.h>
 #import "HUDAppDelegate.h"
 
-/* 诊断辅助：写 /tmp/ailintouch_hud.alive，远程 /hud 端点可读 */
+/* 诊断辅助：写 /tmp/ailintouch_hud.alive（引擎 /hud 可读）+ /tmp/ailintouch_hud.log
+   （引擎 /log?src=hud 可读，带 [HH:mm:ss.SSS] 时间戳）。全部依赖文件，无网络。 */
 static void hud_mark(NSString *msg) {
     [msg writeToFile:@"/tmp/ailintouch_hud.alive"
           atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    /* ★ v1.8.30 双写日志文件：HUD 自身 HTTP(8081) 一直连不上（用户指示
-       "用 touch 引擎读取 HUD 日志文件"）——由稳定的 root 引擎(8080)/log
-       端点合并读 /tmp/ailintouch_hud.log，HUD 状态远程可查。 */
     @autoreleasepool {
         NSDateFormatter *df = [NSDateFormatter new];
         df.dateFormat = @"HH:mm:ss.SSS";
@@ -37,93 +36,6 @@ static void hud_mark(NSString *msg) {
         [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
         [fh closeFile];
     }
-}
-
-/* ---------- 简单 HTTP server（bootrun 模式）----------
-   监听 8081（8080 是 touch 引擎的），提供：
-   GET /log  → 读 /tmp/ailintouch_app.log（App 日志）+ 引擎日志
-   GET /hud  → HUD 存活标记
-   纯 C 线程，不依赖 UIApplicationMain。 */
-#define HUD_HTTP_PORT 8081
-
-static void hud_http_serve(int cfd) {
-    char buf[512] = {0};
-    /* ★ v1.8.29 read 加 2s 超时：坏连接（连上不发数据）不阻塞 accept 循环，
-       否则后续连接全部排队 → connect 超时（v1.8.28 实测 8081 一直连不上） */
-    struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
-    setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    ssize_t n = read(cfd, buf, sizeof(buf) - 1);
-    if (n <= 0) { close(cfd); return; }
-    buf[n] = 0;
-    char body[70000] = {0};
-    size_t bl = 0;
-    if (strncmp(buf, "GET /log", 8) == 0) {
-        /* App 日志在前 + 引擎日志在后（照 v1.8.14 归并思路，简化版） */
-        FILE *af = fopen("/tmp/ailintouch_app.log", "r");
-        if (af) { bl = fread(body, 1, sizeof(body) - 1, af); fclose(af); }
-        if (bl > 0 && body[bl-1] != '\n') body[bl++] = '\n';
-        FILE *ef = fopen("/tmp/ailintouch_engine.log", "r");
-        if (ef) {
-            size_t el = fread(body + bl, 1, sizeof(body) - 1 - bl, ef);
-            bl += el;
-            fclose(ef);
-        }
-        body[bl] = 0;
-    } else if (strncmp(buf, "GET /hud", 8) == 0) {
-        char alive[512] = {0};
-        FILE *hf = fopen("/tmp/ailintouch_hud.alive", "r");
-        if (hf) { size_t n = fread(alive, 1, sizeof(alive)-1, hf); alive[n] = 0; fclose(hf); }
-        snprintf(body, sizeof(body), "hud_alive=%s\n", alive[0] ? alive : "(missing)");
-        bl = strlen(body);
-    } else {
-        snprintf(body, sizeof(body), "AilinHUD HTTP ok (bootrun)\n");
-        bl = strlen(body);
-    }
-    char resp[72000];
-    int rl = snprintf(resp, sizeof(resp),
-        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
-        bl, body);
-    /* ★ v1.8.29 SIGPIPE 保护：write 到已关闭的连接会 SIGPIPE 直接杀进程
-       （实测 hud_alive=http-up-8081 但 8081 refused = HUD 进程崩溃）。
-       已 signal(SIGPIPE, SIG_IGN)，write 返回 -1/EPIPE 只丢该连接不崩。 */
-    if (write(cfd, resp, rl) < 0) { /* EPIPE 等，忽略 */ }
-    close(cfd);
-}
-
-static void *hud_http_thread(void *arg) {
-    (void)arg;
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) { hud_mark(@"http-socket-fail"); return NULL; }
-    int on = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-    struct sockaddr_in addr = {0};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(HUD_HTTP_PORT);
-    addr.sin_addr.s_addr = INADDR_ANY;
-    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-        hud_mark([NSString stringWithFormat:@"http-bind-fail-%d", errno]);
-        return NULL;
-    }
-    listen(fd, 8);
-    hud_mark(@"http-up-8081");
-    /* accept 循环心跳：每 60s 写一次日志，证明进程+HTTP线程活着
-       （8081 连不上时用这个判断进程是否存活） */
-    int hb = 0;
-    for (;;) {
-        struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        FD_SET(fd, &rfds);
-        int sr = select(fd + 1, &rfds, NULL, NULL, &tv);
-        if (sr <= 0) {
-            if (++hb % 12 == 0) hud_mark(@"http-accept-alive");  /* 每 60s */
-            continue;
-        }
-        int cfd = accept(fd, NULL, NULL);
-        if (cfd < 0) continue;
-        hud_http_serve(cfd);
-    }
-    return NULL;
 }
 
 /* ---------- launch_msg 声明（提交 launchd job 系统 daemon 化，照懒人 mqlaunchd） ----------
@@ -172,36 +84,10 @@ static void hud_ensure_launchd(void) {
     else hud_mark(@"launchd-submit-fail");
 }
 
-/* 验证 8081 已被接管（launchd 副本在服务）——v1.8.28 保留备用 */
-static int hud_verify_takeover(void) __attribute__((unused));
-static int hud_verify_takeover(void) {
-    for (int i = 0; i < 10; i++) {
-        int s = socket(AF_INET, SOCK_STREAM, 0);
-        struct sockaddr_in sa = {0};
-        sa.sin_family = AF_INET;
-        sa.sin_port = htons(HUD_HTTP_PORT);
-        sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        if (connect(s, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
-            close(s);
-            return 1;
-        }
-        close(s);
-        usleep(300 * 1000);
-    }
-    return 0;
-}
-
-/* ★ v1.8.28 后台 launchd 提交线程：
-   v1.8.27 实测 hud_alive=manual-instance 卡死 —— launch_msg 是【同步阻塞】调用
-   （连 launchd socket 等响应），放在主流程里导致 HTTP server 线程永远没创建
-   → 8081 无响应。现在：HTTP server 先起（8081 立刻可用），launchd 提交放
-   后台线程，即使 launch_msg 卡住也不影响 HTTP。提交成功【不退出】（手动实例
-   继续跑，避免"手动实例自己监听 8081 → 误判接管成功 → 退出 → 副本 bind 失败
-   → 8081 全没"的竞态）；系统 daemon 化通过日志标记验证（launchd-instance-run
-   出现 = 副本被 launchd 拉起）。 */
+/* ★ v1.8.33 后台 launchd 提交线程（launch_msg 同步阻塞，放后台不阻塞主流程） */
 static void *hud_launchd_thread(void *arg) {
     (void)arg;
-    sleep(1);   /* 等 HTTP server 先起来 */
+    sleep(1);
     hud_ensure_launchd();
     hud_mark(@"launchd-submit-done");
     return NULL;
@@ -209,34 +95,21 @@ static void *hud_launchd_thread(void *arg) {
 
 int main(int argc, char *argv[]) {
     @autoreleasepool {
-        /* ★ v1.8.29 忽略 SIGPIPE：socket write 到已关闭连接默认 SIGPIPE 杀进程
-           （v1.8.28 实测 HUD 崩溃根因）。 */
         signal(SIGPIPE, SIG_IGN);
         hud_mark(@"booting");
-        /* ★ v1.8.27 系统 daemon 化（照懒人 mqlaunchd 拉起 RootCore）：
-           launchd 副本（ppid=1，系统身份）直接跑 HTTP；手动实例提交
-           launchd job + 验证 8081 接管后退出（双保险：没接管就手动跑）。
-           ★ 关键：无 kill_old_instance —— v1.8.23 引擎竞态崩溃的根源是
-           互杀 + launchd 副本循环，AilinHUD 去掉它，两条干净路径。
-           系统身份是下一步副本用 UIApplicationMain 画球（不卡 booting）的前提。 */
+        /* ★ v1.8.33 bootrun 模式（引擎/App spawn 时传）：只写日志 + 提交
+           launchd + 保活。无 8081 HTTP（用户指示：引擎直接读日志文件）。
+           launchd 副本（ppid==1，系统身份）直接保活 = 系统 daemon 化成功。 */
         if (argc >= 2 && strcmp(argv[1], "bootrun") == 0) {
             int is_launchd = (getppid() == 1);
             if (is_launchd) {
                 hud_mark(@"launchd-instance-run");
             } else {
                 hud_mark(@"manual-instance");
-                /* ★ v1.8.28 修复顺序：不再在这里同步调 hud_ensure_launchd()
-                   （launch_msg 同步阻塞卡死，v1.8.27 实测）。HTTP server
-                   先起，launchd 提交放后台线程。 */
-            }
-            pthread_t th;
-            pthread_create(&th, NULL, hud_http_thread, NULL);
-            if (!is_launchd) {
-                /* 后台线程尝试 launchd 系统 daemon 化（不阻塞 HTTP） */
                 pthread_t lt;
                 pthread_create(&lt, NULL, hud_launchd_thread, NULL);
             }
-            /* 主线程保活（HTTP server 在子线程跑） */
+            /* 主线程保活 */
             for (;;) { sleep(60); }
         }
         int rc = UIApplicationMain(argc, argv, nil,

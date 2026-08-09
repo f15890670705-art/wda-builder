@@ -435,7 +435,59 @@
         if (!defCls) { [self reportToEngine:@"fb-def-missing"]; return; }
         id def = ((id(*)(id, SEL))objc_msgSend)(defCls, NSSelectorFromString(@"new"));
 
-        /* v1.8.42 铁证：不设 identity（FBSMutableSceneIdentity init 抛异常） */
+        /* ★ v1.8.48 identity 必须设置！v1.8.42 错误地"跳过 identity"（当时
+           FBSMutableSceneIdentity init 抛异常被吞）→ def.identity=nil →
+           FBSceneManager.m:462 断言失败（HUD/主 App 同一行，铁证与身份无关）。
+           正确姿势：FBSSceneIdentity identityWithIdentifier:（不可变类方法）。 */
+        id identity = nil;
+        @try {
+            Class sceneIdentCls = NSClassFromString(@"FBSSceneIdentity");
+            if (sceneIdentCls) {
+                SEL sel = NSSelectorFromString(@"identityWithIdentifier:");
+                if ([sceneIdentCls respondsToSelector:sel]) {
+                    NSString *ident = [NSString stringWithFormat:@"com.ailintouch.ball.%d",
+                        (int)([NSDate timeIntervalSinceReferenceDate] * 1000)];
+                    identity = ((id(*)(id, SEL, id))objc_msgSend)(sceneIdentCls, sel, ident);
+                    [self reportToEngine:identity ? @"fb-ident-ok-sceneident"
+                                                  : @"fb-ident-nil-sceneident"];
+                }
+            }
+        } @catch (NSException *e) {
+            [self reportToEngine:[NSString stringWithFormat:@"fb-ident-ex-%@", e.name]];
+        }
+        if (!identity) {
+            /* 兜底：FBSMutableSceneIdentity initWithIdentifier:（v1.8.39 抛异常的路径，
+               再试一次看是否参数格式问题） */
+            @try {
+                Class mutIdentCls = NSClassFromString(@"FBSMutableSceneIdentity");
+                if (mutIdentCls) {
+                    NSString *ident = [NSString stringWithFormat:@"com.ailintouch.ball.%d",
+                        (int)([NSDate timeIntervalSinceReferenceDate] * 1000)];
+                    id inst = ((id(*)(id, SEL))objc_msgSend)(mutIdentCls, NSSelectorFromString(@"alloc"));
+                    identity = ((id(*)(id, SEL, id))objc_msgSend)(inst, NSSelectorFromString(@"initWithIdentifier:"), ident);
+                    [self reportToEngine:identity ? @"fb-ident-ok-mutable"
+                                                  : @"fb-ident-nil-mutable"];
+                }
+            } @catch (NSException *e) {
+                [self reportToEngine:[NSString stringWithFormat:@"fb-ident-mut-ex-%@", e.name]];
+            }
+        }
+        if (identity) {
+            @try {
+                SEL setSel = NSSelectorFromString(@"setIdentity:");
+                if ([def respondsToSelector:setSel]) {
+                    ((void(*)(id, SEL, id))objc_msgSend)(def, setSel, identity);
+                    [self reportToEngine:@"fb-ident-set-ok"];
+                } else {
+                    [def setValue:identity forKey:@"identity"];
+                    [self reportToEngine:@"fb-ident-set-kvc"];
+                }
+            } @catch (NSException *e) {
+                [self reportToEngine:[NSString stringWithFormat:@"fb-ident-set-ex-%@", e.name]];
+            }
+        } else {
+            [self reportToEngine:@"fb-ident-all-fail"];
+        }
 
         Class paramsCls = NSClassFromString(@"FBSMutableSceneParameters");
         id params = paramsCls ? ((id(*)(id, SEL))objc_msgSend)(paramsCls, NSSelectorFromString(@"new")) : nil;
@@ -452,7 +504,9 @@
             @try {
                 fbSceneBlock = ((id(*)(id, SEL, id, id))objc_msgSend)(manager, createSel, def, params);
             } @catch (NSException *e) {
-                [self reportToEngine:[NSString stringWithFormat:@"fb-create-ex-%@", e.name]];
+                /* ★ v1.8.48 打 reason：拿 FBSceneManager.m:462 断言的完整消息 */
+                NSString *reason = [e.reason substringToIndex:MIN((NSUInteger)200, e.reason.length)];
+                [self reportToEngine:[NSString stringWithFormat:@"fb-create-ex-%@-%@", e.name, reason]];
             }
             createDone = YES;
         });

@@ -142,16 +142,39 @@ static UIWindow *g_manualWindow = nil;
         return;
     }
 
-    /* 3. identity —— ★ v1.8.42 不再设置！
-       v1.8.39 实测：FBSMutableSceneIdentity 的 init 全抛 NSInvalidArgumentException，
-       设置失败后 def 不干净 → createSceneWithDefinition 卡死（等 FrontBoard）。
-       agoverlayd 符号里【没有任何 identity selector】——它根本不设 identity，
-       def 直接用 new 的干净对象。照 agoverlayd：跳过 identity。 */
+    /* 3. identity —— ★ v1.8.48 必须设置！
+       v1.8.42 错误地"跳过 identity"（当时 FBSMutableSceneIdentity init 抛异常
+       被吞）→ def.identity=nil → FBSceneManager.m:462 断言失败（HUD/主 App
+       同一行 = 与身份无关，就是 identity 缺失）。正确姿势：FBSSceneIdentity
+       identityWithIdentifier:（不可变类方法，不抛异常）。 */
     @try {
-        Class identCls = NSClassFromString(@"FBSMutableSceneIdentity");
-        hud_mark(identCls ? @"fb-ident-skip-(agoverlayd-no-identity)" : @"fb-ident-class-missing-skip");
+        Class sceneIdentCls = NSClassFromString(@"FBSSceneIdentity");
+        if (sceneIdentCls) {
+            SEL sel = NSSelectorFromString(@"identityWithIdentifier:");
+            if ([sceneIdentCls respondsToSelector:sel]) {
+                NSString *ident = [NSString stringWithFormat:@"com.ailintouch.ball.%d",
+                    (int)([NSDate timeIntervalSinceReferenceDate] * 1000)];
+                id identity = ((id(*)(id, SEL, id))objc_msgSend)(sceneIdentCls, sel, ident);
+                if (identity) {
+                    SEL setSel = NSSelectorFromString(@"setIdentity:");
+                    if ([def respondsToSelector:setSel]) {
+                        ((void(*)(id, SEL, id))objc_msgSend)(def, setSel, identity);
+                        hud_mark(@"fb-ident-set-ok-sceneident");
+                    } else {
+                        [def setValue:identity forKey:@"identity"];
+                        hud_mark(@"fb-ident-set-kvc");
+                    }
+                } else {
+                    hud_mark(@"fb-ident-nil-sceneident");
+                }
+            } else {
+                hud_mark(@"fb-ident-no-sel-sceneident");
+            }
+        } else {
+            hud_mark(@"fb-ident-class-missing-sceneident");
+        }
     } @catch (NSException *e) {
-        hud_mark(@"fb-ident-check-ex");
+        hud_mark([NSString stringWithFormat:@"fb-ident-ex-%@", e.name]);
     }
 
     /* 4. FBSMutableSceneParameters */
@@ -181,7 +204,9 @@ static UIWindow *g_manualWindow = nil;
             @try {
                 fbSceneBlock = ((id(*)(id, SEL, id, id))objc_msgSend)(manager, createSel, def, params);
             } @catch (NSException *e) {
-                hud_mark([NSString stringWithFormat:@"fb-create-ex-%@", e.name]);
+                /* ★ v1.8.48 打 reason：拿 FBSceneManager.m:462 断言的完整消息 */
+                NSString *reason = [e.reason substringToIndex:MIN((NSUInteger)200, e.reason.length)];
+                hud_mark([NSString stringWithFormat:@"fb-create-ex-%@-%@", e.name, reason]);
             }
             createDone = YES;
         });

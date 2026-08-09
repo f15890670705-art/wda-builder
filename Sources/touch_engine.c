@@ -36,11 +36,18 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.5"
+#define ENGINE_VERSION "1.8.6"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
     if (!logfp) return;
+    /* ★ v1.8.6 引擎日志加时间戳（[HH:mm:ss]），跨进程日志对齐时序分析 */
+    time_t now = time(NULL);
+    struct tm tmv;
+    localtime_r(&now, &tmv);
+    char ts[32];
+    strftime(ts, sizeof(ts), "%H:%M:%S", &tmv);
+    fprintf(logfp, "[%s] ", ts);
     va_list ap; va_start(ap, fmt); vfprintf(logfp, fmt, ap); va_end(ap);
     fprintf(logfp, "\n"); fflush(logfp);
 }

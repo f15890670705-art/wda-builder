@@ -52,6 +52,7 @@ static AppDelegate *g_delegate;
 @property (nonatomic, strong) ControlPanelViewController *controlVC;
 @property (nonatomic, strong) ServiceManagerViewController *serviceVC;
 @property (nonatomic, assign) pid_t enginePid;
+@property (nonatomic, assign) BOOL engineReady;   /* ★ v1.8.6 引擎 HTTP 就绪标记（分阶段启动） */
 @property (nonatomic, strong) NSString *cachedIP;
 @property (nonatomic, strong) AVAudioPlayer *keepAlivePlayer;
 @end
@@ -179,6 +180,77 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     if (rc != 0) { NSLog(@"[AilinTouch] spawn failed: %s", strerror(rc)); return -1; }
     NSLog(@"[AilinTouch] engine spawn pid=%d", pid);
     return pid;
+}
+
+/* ★ v1.8.6 App 启动阶段日志：写 /tmp/ailintouch_app.log（引擎就绪后 /log
+   合并读取）+ NSLog。启动瞬间引擎未就绪 HTTP 不可靠，必须落盘。
+   用户铁证"app启动你直接就启动悬浮球跟引擎 也不分先后也不分时间"——
+   启动必须分阶段、每阶段打点。 */
+- (void)appTrace:(NSString *)msg {
+    @try {
+        NSString *path = @"/tmp/ailintouch_app.log";
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (!fh) {
+            [[NSFileManager defaultManager] createFileAtPath:path
+                                                    contents:nil attributes:nil];
+            fh = [NSFileHandle fileHandleForWritingAtPath:path];
+        }
+        if (fh) {
+            [fh seekToEndOfFile];
+            NSDateFormatter *df = [NSDateFormatter new];
+            df.dateFormat = @"HH:mm:ss.SSS";
+            NSString *line = [NSString stringWithFormat:@"[%@] %@\n",
+                              [df stringFromDate:[NSDate date]], msg];
+            [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+            [fh closeFile];
+        }
+    } @catch (NSException *e) { }
+    NSLog(@"[AilinTouch] %@", msg);
+}
+
+/* ★ v1.8.6 阶段2：轮询引擎 HTTP 就绪（/diag 可连 = 引擎完全起来监听 8080）。
+   球创建前必须先等引擎就绪 —— 分先后分时间，不许一股脑全启动。 */
+- (void)pollEngineReady {
+    static int tries = 0;
+    NSMutableURLRequest *req = [NSMutableURLRequest
+        requestWithURL:[NSURL URLWithString:@"http://127.0.0.1:8080/diag"]];
+    req.timeoutInterval = 1.0;
+    NSURLSessionDataTask *t = [[NSURLSession sharedSession]
+        dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (e == nil && d && d.length > 0) {
+                [self appTrace:[NSString stringWithFormat:@"phase-2 engine-ready tries=%d", tries]];
+                self.engineReady = YES;
+            } else if (tries++ < 30) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    [self pollEngineReady];
+                });
+            } else {
+                [self appTrace:@"phase-2 engine-not-ready-giveup"];
+            }
+        });
+    }];
+    [t resume];
+}
+
+/* ★ v1.8.6 阶段4：等引擎就绪再建球（超时 9s 也建球，球创建不依赖引擎，
+   只是日志通道需要引擎先就绪才能上报） */
+- (void)waitEngineReadyThenShowBall:(UIWindowScene *)scene try:(int)tries {
+    if (self.engineReady) {
+        [self appTrace:@"phase-4 ball-create engine-ready"];
+        [[FloatingWindowManager shared] showFloatingBallInScene:scene];
+        return;
+    }
+    if (tries < 30) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [self waitEngineReadyThenShowBall:scene try:tries + 1];
+        });
+    } else {
+        [self appTrace:@"phase-4 ball-create engine-timeout-giveup"];
+        [[FloatingWindowManager shared] showFloatingBallInScene:scene];
+    }
 }
 
 #pragma mark Unix socket
@@ -318,6 +390,12 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     g_delegate = self;
 
+    /* ★ v1.8.6 启动分阶段（用户铁证"不分先后也不分时间一股脑全启动"）：
+       阶段0 app-start → 阶段1 spawn 引擎 → 阶段2 轮询引擎 HTTP 就绪 →
+       阶段3 scene 连接 → 阶段4 引擎就绪后才建球 → 阶段5 binder → 阶段6 SBS 注册。
+       每阶段 appTrace 落盘 + 引擎日志带时间戳，跨进程时序一目了然。 */
+    [self appTrace:@"phase-0 app-start"];
+
     /* 崩溃日志：注册 handler，App 被杀原因写到 /tmp 供引擎读取 */
     NSSetUncaughtExceptionHandler(&crash_handler);
     /* ★ v1.6.4: 信号级崩溃捕获（SIGABRT/SIGSEGV/SIGBUS 也写崩溃日志） */
@@ -340,17 +418,17 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
                                                  name:@"AilinTouchSceneReady"
                                                object:nil];
 
-    /* ★ v1.8.0 悬浮球由独立 AilinHUD 进程显示（懒人 RootCore 同款），
-       主 App 不再创建 App 内球（避免双球）。AilinHUD 由引擎 ensure_hud 拉起。 */
-
-    /* 1. 拉起引擎（若上次手动停止过，尊重用户选择：不自动拉起） */
+    /* 阶段1: 拉起引擎（若上次手动停止过，尊重用户选择：不自动拉起） */
     if ([[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED]) {
-        NSLog(@"[AilinTouch] stopped marker present, engine stays down");
+        [self appTrace:@"phase-1 engine-stopped-marker, stay down"];
     } else {
         self.enginePid = [self spawnEngineAsRoot];
+        [self appTrace:[NSString stringWithFormat:@"phase-1 engine-spawned pid=%d", self.enginePid]];
+        /* 阶段2: 轮询引擎 HTTP 就绪（分先后：球创建必须等引擎先起来） */
+        [self pollEngineReady];
     }
 
-    /* 2. 每秒刷新状态 */
+    /* 3. 每秒刷新状态 */
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
         [self refreshStatus];
     }];
@@ -380,11 +458,14 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
        裸进程 UIApplicationMain 卡 booting，懒人 RootCore bootrun 分支
        根本不调 UIApplicationMain 是铁证）。主 App 是正常安装注册的 App，
        scene 合法 → 窗口能拿 contextID + binder 绑系统 root window。
-       这里用【延迟 0.5 秒】创建（懒人 setupHUDWindow 后 dispatch_after(0.5s)
-       再 registerHUDWindow 的时序），等 scene 完全稳定。 */
+       ★ v1.8.6 阶段4：严格【等引擎就绪后再建球】——分先后分时间
+       （用户铁证"不分先后一股脑全启动"）。先等 0.5s 让 scene 稳定
+       （懒人 setupHUDWindow 后 dispatch_after(0.5s) 时序），再等引擎
+       HTTP 就绪（waitEngineReadyThenShowBall 轮询），最后建球。 */
+    [self appTrace:@"phase-3 scene-ready"];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        [[FloatingWindowManager shared] showFloatingBallInScene:scene];
+        [self waitEngineReadyThenShowBall:scene try:0];
     });
 
     self.serviceVC.onTapStart = ^{

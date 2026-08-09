@@ -24,6 +24,7 @@
 #include <mach-o/dyld.h>
 #include <mach/mach_time.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <limits.h>
 
 extern char **environ;
 
@@ -37,7 +38,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.29"
+#define ENGINE_VERSION "1.8.30"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -63,6 +64,7 @@ static void dlog(const char *fmt, ...) {
 #define LOG_MAX_LINES 1024
 #define LOG_MAX_LEN   256
 static char log_app_lines[LOG_MAX_LINES][LOG_MAX_LEN];
+static char log_hud_lines[LOG_MAX_LINES][LOG_MAX_LEN];
 static char log_eng_lines[LOG_MAX_LINES][LOG_MAX_LEN];
 
 /* 解析行首 [HH:MM:SS.mmm]（兼容旧的 [HH:MM:SS]）→ 自当日 0 点的毫秒数 */
@@ -435,27 +437,35 @@ static void handle_client(int cfd) {
         } else if (strncmp(path, "/log", 4) == 0) {
             /* ★ v1.8.14 日志整理：app log 与引擎日志【按时间戳归并排序】输出，
                统一 [HH:mm:ss.SSS] 格式，解决 v1.8.13 及之前的时间倒挂
-               （app 流水在前、引擎日志在后，12:42 后面跟着 12:50）。 */
+               （app 流水在前、引擎日志在后，12:42 后面跟着 12:50）。
+               ★ v1.8.30 加第三路：AilinHUD 日志（/tmp/ailintouch_hud.log）
+               —— 用户指示"用 touch 引擎读取 HUD 的日志文件"：8081 一直
+               连不上（AilinHUD 自身 HTTP server 不稳），改由稳定的 root
+               引擎合并暴露，HUD 状态从 8080/log 直接可查。 */
             int anc = log_read_lines("/tmp/ailintouch_app.log", log_app_lines, LOG_MAX_LINES);
+            int hnc = log_read_lines("/tmp/ailintouch_hud.log", log_hud_lines, LOG_MAX_LINES);
             int enc = log_read_lines(LOG_PATH, log_eng_lines, LOG_MAX_LINES);
             if (enc == 0) enc = log_read_lines(LOG_PATH_TMP, log_eng_lines, LOG_MAX_LINES);
-            /* 两路归并（各自按时间有序） */
+            /* 三路归并（各自按时间有序） */
             char *out = malloc(131072);
             if (!out) {
                 snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\n\n");
             } else {
             size_t ol = 0;
-            int i = 0, j = 0;
-            while ((i < anc || j < enc) && ol < 131072 - LOG_MAX_LEN) {
+            int i = 0, j = 0, k = 0;
+            while ((i < anc || j < enc || k < hnc) && ol < 131072 - LOG_MAX_LEN) {
+                /* 三路里取时间最早的一条 */
+                const char *a = (i < anc) ? log_app_lines[i] : NULL;
+                const char *e = (j < enc) ? log_eng_lines[j] : NULL;
+                const char *h = (k < hnc) ? log_hud_lines[k] : NULL;
                 const char *pick = NULL;
-                if (i < anc && j < enc) {
-                    pick = (log_ts_ms(log_app_lines[i]) <= log_ts_ms(log_eng_lines[j]))
-                               ? log_app_lines[i++] : log_eng_lines[j++];
-                } else if (i < anc) {
-                    pick = log_app_lines[i++];
-                } else {
-                    pick = log_eng_lines[j++];
-                }
+                long long ta = a ? log_ts_ms(a) : LLONG_MAX;
+                long long te = e ? log_ts_ms(e) : LLONG_MAX;
+                long long th = h ? log_ts_ms(h) : LLONG_MAX;
+                if (a && ta <= te && ta <= th)      { pick = a; i++; }
+                else if (e && te <= ta && te <= th) { pick = e; j++; }
+                else if (h)                          { pick = h; k++; }
+                if (!pick) break;
                 size_t pl = strlen(pick);
                 memcpy(out + ol, pick, pl); ol += pl;
                 out[ol++] = '\n';

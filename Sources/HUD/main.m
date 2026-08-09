@@ -19,6 +19,24 @@
 static void hud_mark(NSString *msg) {
     [msg writeToFile:@"/tmp/ailintouch_hud.alive"
           atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    /* ★ v1.8.30 双写日志文件：HUD 自身 HTTP(8081) 一直连不上（用户指示
+       "用 touch 引擎读取 HUD 日志文件"）——由稳定的 root 引擎(8080)/log
+       端点合并读 /tmp/ailintouch_hud.log，HUD 状态远程可查。 */
+    @autoreleasepool {
+        NSDateFormatter *df = [NSDateFormatter new];
+        df.dateFormat = @"HH:mm:ss.SSS";
+        NSString *line = [NSString stringWithFormat:@"[%@] [hud] %@\n",
+                          [df stringFromDate:[NSDate date]], msg];
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/ailintouch_hud.log"];
+        if (!fh) {
+            [[NSFileManager defaultManager] createFileAtPath:@"/tmp/ailintouch_hud.log"
+                                                    contents:nil attributes:nil];
+            fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/ailintouch_hud.log"];
+        }
+        [fh seekToEndOfFile];
+        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh closeFile];
+    }
 }
 
 /* ---------- 简单 HTTP server（bootrun 模式）----------
@@ -75,7 +93,7 @@ static void hud_http_serve(int cfd) {
 static void *hud_http_thread(void *arg) {
     (void)arg;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return NULL;
+    if (fd < 0) { hud_mark(@"http-socket-fail"); return NULL; }
     int on = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
     struct sockaddr_in addr = {0};
@@ -88,7 +106,19 @@ static void *hud_http_thread(void *arg) {
     }
     listen(fd, 8);
     hud_mark(@"http-up-8081");
+    /* accept 循环心跳：每 60s 写一次日志，证明进程+HTTP线程活着
+       （8081 连不上时用这个判断进程是否存活） */
+    int hb = 0;
     for (;;) {
+        struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(fd, &rfds);
+        int sr = select(fd + 1, &rfds, NULL, NULL, &tv);
+        if (sr <= 0) {
+            if (++hb % 12 == 0) hud_mark(@"http-accept-alive");  /* 每 60s */
+            continue;
+        }
         int cfd = accept(fd, NULL, NULL);
         if (cfd < 0) continue;
         hud_http_serve(cfd);

@@ -37,7 +37,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.18"
+#define ENGINE_VERSION "1.8.19"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -739,9 +739,9 @@ static void ensure_hud(void) {
 }
 
 /* 安装 launchd 守护进程（开机自启 + KeepAlive 崩溃重启） */
-/* ---------- launch_msg 声明（launch.h 老 API，iOS15+ SDK 已无头文件，手动声明） ----------
-   launch_msg 直接连 launchd 的 socket 提交 job，不 exec 外部二进制 ——
-   绕开 arm64e launchctl 在 arm64 进程 exec 失败（v1.8.15 实测 Bad executable）。 */
+/* ---------- launch_msg 声明（v1.8.15-18 launchd daemon 方案，v1.8.19 已回滚，保留参考） ----------
+   launch_msg 直接连 launchd 的 socket 提交 job，不 exec 外部二进制。
+   v1.8.19 回滚：该方案导致引擎消失/不稳定，不再调用，标 unused 防警告。 */
 typedef struct _launch_data *launch_data_t;
 extern launch_data_t launch_msg(launch_data_t);
 extern launch_data_t launch_data_alloc(int);
@@ -751,6 +751,7 @@ extern launch_data_t launch_data_new_string(const char *);
 extern launch_data_t launch_data_new_bool(int);
 #define LAUNCH_DATA_DICTIONARY 3
 
+__attribute__((unused))
 static int ensure_launchd(void) {
     if (copy_self(INSTALL_PATH) != 0) return -1;
 
@@ -822,56 +823,12 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    int is_launchd = (getppid() == 1);  /* launchd 拉起时父进程是 launchd */
-
-    if (!is_launchd) {
-        /* 由 App spawn 的手动实例：
-           1) 先 launchctl unload —— 停掉 launchd job，KeepAlive 不再用旧文件副本重启
-           2) 再杀旧实例（含 launchd 常驻的旧引擎，否则 8080 一直被旧代码占着）
-           3) 覆盖安装 launchd 配置（copy_self 把新二进制拷到 INSTALL_PATH）
-           4) 退出交给 launchd 拉起新版本 */
-        pid_t sp;
-        char *u[] = {"/bin/launchctl", "unload", LAUNCHD_PLIST, NULL};
-        if (posix_spawn(&sp, "/bin/launchctl", NULL, NULL, u, environ) == 0) {
-            int st = 0;
-            waitpid(sp, &st, 0);
-            LOG("launchctl unload rc=%d", WIFEXITED(st) ? WEXITSTATUS(st) : -1);
-        }
-        usleep(200 * 1000);   /* 等 unload 生效，KeepAlive 不再拉旧副本 */
-        kill_old_instance();
-        usleep(200 * 1000);
-        int rc = ensure_launchd();
-        if (rc == 0) {
-            /* ★ v1.8.17 双保险：验证 launchd 副本真的接管 8080 才退出！
-               launch_msg 缺 label（v1.8.16）job 没注册 → handoff 退出后
-               引擎彻底消失 8080 拒连。现在验证 3 秒内 8080 可连才退出，
-               否则继续手动实例跑（保证引擎永存）。 */
-            int takeover = 0;
-            for (int i = 0; i < 10; i++) {
-                int s = socket(AF_INET, SOCK_STREAM, 0);
-                struct sockaddr_in sa = {0};
-                sa.sin_family = AF_INET;
-                sa.sin_port = htons(HTTP_PORT);
-                sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-                if (connect(s, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
-                    close(s);
-                    takeover = 1;
-                    break;
-                }
-                close(s);
-                usleep(300 * 1000);
-            }
-            if (takeover) {
-                LOG("launchd takeover ok, exiting");
-                return 0;
-            }
-            LOG("launchd NOT up, run as manual instance");
-        } else {
-            LOG("launchd install failed, run as manual instance");
-        }
-    }
-
-    kill_old_instance();  /* 清旧实例（launchd 拉起时清理残留） */
+    /* ★ v1.8.19 回滚 launchd handoff：App spawn 引擎直接跑（简单可靠）。
+       v1.8.15-18 的 launch_msg/launchctl 系统 daemon 方案导致引擎消失/
+       不稳定（用户暴怒"越修越垃圾"）—— launch_msg 老协议、arm64e exec、
+       handoff 竞争 8080 全是坑。回滚到 v1.8.14 模式：kill 旧实例保证
+       每次打开更新引擎，直接跑服务。launchd 常驻留待稳定后再说。 */
+    kill_old_instance();  /* 清旧实例（每次 App 打开都换新引擎，保证版本更新） */
 
     if (hid_init() != 0) { LOG("hid_init failed"); return 1; }
 

@@ -30,6 +30,22 @@ LDFLAGS = -arch $(ARCH) -isysroot $(SDK) \
           -framework IOKit -framework QuartzCore \
           -framework AVFoundation -framework AudioToolbox
 
+# ★ v1.8.55 HUD 单独编译 arm64e：iOS 14.6 的 /bin/sh、/bin/launchctl 都是
+#   arm64e 系统二进制，arm64 进程 exec 不了（v1.8.54 实测 popen n=0 +
+#   launchctl-spawn-fail-85 = arm64e exec 失败）。懒人 MQLaunchd 是 arm64e
+#   编译所以能 exec 系统二进制提交 launchd job。HUD arm64e → exec
+#   launchctl submit → 注册成 launchd daemon → 系统身份 → createScene 成功。
+#   引擎/主 App 保持 arm64（触摸模块不动）。
+HUD_ARCH = arm64e
+HUD_CFLAGS = -arch $(HUD_ARCH) -isysroot $(SDK) -fobjc-arc -Wall \
+             -Wno-deprecated-declarations \
+             -ISources
+HUD_LDFLAGS = -arch $(HUD_ARCH) -isysroot $(SDK) \
+              -framework Foundation -framework UIKit \
+              -framework CoreFoundation -framework CoreGraphics \
+              -framework IOKit -framework QuartzCore \
+              -framework AVFoundation -framework AudioToolbox
+
 APP_SOURCES  = Sources/main.m Sources/AppDelegate.m \
                Sources/AilinTouchSceneDelegate.m \
                Sources/ATTabBarController.m \
@@ -49,6 +65,8 @@ build:
 	@mkdir -p $(APP_DIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(APP_SOURCES) -o $(APP_DIR)/$(APP_NAME)
 	$(CC) $(CFLAGS) $(ENGINE_SOURCE) -o $(APP_DIR)/touch_engine
+	# ★ v1.8.55 HUD 用 arm64e 编译（HUD_CFLAGS/HUD_LDFLAGS）——能 exec 系统
+	#   二进制（/bin/launchctl arm64e），注册 launchd daemon。其他同上。
 	# ★ v1.8.1 AilinHUD 独立 .app（照懒人 RootCore 终极铁证重构）：
 	#   懒人 RootCore（com.nx.RootCore）= 独立 UIApplication 进程（@_UIApplicationMain
 	#   + FBSceneManager 二进制 scene + UIRootWindowScenePresentationBinder）。
@@ -56,7 +74,7 @@ build:
 	#   不等 scene 连接 → 不卡 booting（v1.5.0 共享主 bundle+SceneManifest 卡死的根因）。
 	#   didFinish 手动建窗口 + FBSceneManager 二进制 scene + binder 绑系统 root window。
 	@mkdir -p $(HUD_DIR)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(HUD_SOURCES) -o $(HUD_DIR)/$(HUD_NAME)
+	$(CC) $(HUD_CFLAGS) $(HUD_LDFLAGS) $(HUD_SOURCES) -o $(HUD_DIR)/$(HUD_NAME)
 	@cp Resources/HUD/Info.plist $(HUD_DIR)/Info.plist
 	@printf 'APPL????' > $(HUD_DIR)/PkgInfo
 	@cp Resources/Info.plist $(APP_DIR)/Info.plist

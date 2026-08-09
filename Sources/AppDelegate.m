@@ -195,6 +195,34 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     return pid;
 }
 
+/* ★ v1.8.25 用户指示：先在 AilinHUD 搞 HTTP server 日志跑通，再管引擎。
+   主 App 拉起 AilinHUD（bootrun 模式 = 纯 HTTP server 8081，不调
+   UIApplicationMain 不卡）。路径：嵌套在主 bundle 的 AilinHUD.app/AilinHUD。 */
+- (void)spawnHudBootrun {
+    NSString *bundlePath = [[NSBundle mainBundle] resourcePath];
+    NSString *hudPath = [bundlePath stringByAppendingPathComponent:@"AilinHUD.app/AilinHUD"];
+    if (![[NSFileManager defaultManager] isExecutableFileAtPath:hudPath]) {
+        [self appTrace:@"hud-binary-missing"];
+        return;
+    }
+    /* 先杀旧 HUD（防多开） */
+    pid_t pk;
+    char *pka[] = {"/usr/bin/pkill", "-f", "AilinHUD", NULL};
+    if (posix_spawn(&pk, "/usr/bin/pkill", NULL, NULL, pka, environ) == 0) {
+        int pst = 0;
+        waitpid(pk, &pst, 0);
+    }
+    usleep(200 * 1000);
+    pid_t pid = 0;
+    char *argv[] = {(char *)[hudPath UTF8String], "bootrun", NULL};
+    int rc = posix_spawn(&pid, [hudPath UTF8String], NULL, NULL, argv, environ);
+    if (rc == 0) {
+        [self appTrace:[NSString stringWithFormat:@"hud-spawned bootrun pid=%d", pid]];
+    } else {
+        [self appTrace:[NSString stringWithFormat:@"hud-spawn-fail-%s", strerror(rc)]];
+    }
+}
+
 /* ★ v1.8.6 App 启动阶段日志：写 /tmp/ailintouch_app.log（引擎就绪后 /log
    合并读取）+ NSLog。启动瞬间引擎未就绪 HTTP 不可靠，必须落盘。
    用户铁证"app启动你直接就启动悬浮球跟引擎 也不分先后也不分时间"——
@@ -436,6 +464,10 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         /* 阶段2: 轮询引擎 HTTP 就绪（分先后：球创建必须等引擎先起来） */
         [self pollEngineReady];
     }
+
+    /* ★ v1.8.25 用户指示：先跑通 AilinHUD 的 HTTP server 日志（8081），
+       再管 touch 引擎。主 App 拉起 AilinHUD（bootrun 纯 HTTP 模式）。 */
+    [self spawnHudBootrun];
 
     /* ★ v1.8.21 状态刷新改为【事件驱动】，删除 30s 定时轮询（用户建议：
        引擎关闭了就刷新一下，为什么非要自动刷新）。

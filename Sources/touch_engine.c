@@ -17,6 +17,7 @@
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <spawn.h>
 #include <dispatch/dispatch.h>
@@ -36,22 +37,73 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.13"
+#define ENGINE_VERSION "1.8.14"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
     if (!logfp) return;
-    /* ★ v1.8.6 引擎日志加时间戳（[HH:mm:ss]），跨进程日志对齐时序分析 */
-    time_t now = time(NULL);
+    /* ★ v1.8.14 统一时间戳格式 [HH:mm:ss.SSS]（毫秒，和 App 日志一致），
+       跨进程日志才能按时间归并排序。 */
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
     struct tm tmv;
-    localtime_r(&now, &tmv);
-    char ts[32];
-    strftime(ts, sizeof(ts), "%H:%M:%S", &tmv);
-    fprintf(logfp, "[%s] ", ts);
+    localtime_r(&tv.tv_sec, &tmv);
+    char ts[40];
+    snprintf(ts, sizeof(ts), "[%02d:%02d:%02d.%03d]",
+             tmv.tm_hour, tmv.tm_min, tmv.tm_sec, (int)(tv.tv_usec / 1000));
+    fprintf(logfp, "%s ", ts);
     va_list ap; va_start(ap, fmt); vfprintf(logfp, fmt, ap); va_end(ap);
     fprintf(logfp, "\n"); fflush(logfp);
 }
 #define LOG(fmt, ...) dlog(fmt, ##__VA_ARGS__)
+
+/* ---------- v1.8.14 日志归并 ----------
+   /log 端点把 app log 与引擎日志【按时间戳归并排序】输出（各自按时间有序，
+   两路归并 O(n)），统一 [HH:mm:ss.SSS] 格式，解决时间倒挂/分块拼接。 */
+#define LOG_MAX_LINES 1024
+#define LOG_MAX_LEN   256
+static char log_app_lines[LOG_MAX_LINES][LOG_MAX_LEN];
+static char log_eng_lines[LOG_MAX_LINES][LOG_MAX_LEN];
+
+/* 解析行首 [HH:MM:SS.mmm]（兼容旧的 [HH:MM:SS]）→ 自当日 0 点的毫秒数 */
+static long long log_ts_ms(const char *line) {
+    if (!line || line[0] != '[') return 0;
+    int h = 0, m = 0, s = 0, ms = 0;
+    if (sscanf(line + 1, "%d:%d:%d", &h, &m, &s) != 3) return 0;
+    const char *cl = strchr(line, ']');
+    if (cl) {
+        for (const char *q = line + 1; q < cl; q++) {
+            if (*q == '.') { sscanf(q + 1, "%3d", &ms); break; }
+        }
+    }
+    return ((long long)h * 3600 + (long long)m * 60 + s) * 1000 + ms;
+}
+
+/* 读文件到行数组，返回行数 */
+static int log_read_lines(const char *path, char lines[][LOG_MAX_LEN], int max) {
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    char *buf = malloc(65536);
+    if (!buf) { fclose(f); return 0; }
+    size_t n = fread(buf, 1, 65535, f);
+    fclose(f);
+    buf[n] = 0;
+    int cnt = 0;
+    char *p = buf;
+    while (*p && cnt < max) {
+        char *nl = strchr(p, '\n');
+        size_t len = nl ? (size_t)(nl - p) : strlen(p);
+        if (len > 0 && len < LOG_MAX_LEN - 1) {
+            memcpy(lines[cnt], p, len);
+            lines[cnt][len] = 0;
+            cnt++;
+        }
+        if (!nl) break;
+        p = nl + 1;
+    }
+    free(buf);
+    return cnt;
+}
 
 /* 创建数据区目录结构（launchd 实例 = root 无 sandbox 可建；App spawn 实例 sandbox 内失败则日志落 /tmp） */
 static void ensure_data_dirs(void) {
@@ -321,8 +373,7 @@ static void handle_client(int cfd) {
     ssize_t n = read(cfd, buf, sizeof(buf)-1);
     if (n <= 0) { close(cfd); return; }
 
-    char reply[65536];   /* ★ v1.8.8 /log 返回 400 行日志（之前 80 行太少——
-                            启动流水+心跳几秒就刷没了，用户质疑"80行能干啥"）*/
+    char reply[131072];   /* ★ v1.8.14 /log 归并输出（app+引擎 400 行，128K）*/
     /* HTTP 请求：GET /tap?x=..&y=.. HTTP/1.1 */
     if (strncmp(buf, "GET ", 4) == 0) {
         char path[256] = {0};
@@ -384,29 +435,39 @@ static void handle_client(int cfd) {
                 snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{\"ok\":false}");
             }
         } else if (strncmp(path, "/log", 4) == 0) {
-            /* ★ v1.8.7 启动流水在前：先读 App 日志（启动阶段流水），再读引擎
-               日志（持久区优先，sandbox 实例降级 /tmp）。★ v1.8.8 行数
-               80 → 400（用户质疑"80行能干啥"，启动流水+心跳几秒就刷没了）。 */
-            char lbuf[65536] = {0};
-            size_t ln = 0;
-            FILE *af = fopen("/tmp/ailintouch_app.log", "r");
-            if (af) {
-                ln = fread(lbuf, 1, sizeof(lbuf) - 1, af);
-                fclose(af);
+            /* ★ v1.8.14 日志整理：app log 与引擎日志【按时间戳归并排序】输出，
+               统一 [HH:mm:ss.SSS] 格式，解决 v1.8.13 及之前的时间倒挂
+               （app 流水在前、引擎日志在后，12:42 后面跟着 12:50）。 */
+            int anc = log_read_lines("/tmp/ailintouch_app.log", log_app_lines, LOG_MAX_LINES);
+            int enc = log_read_lines(LOG_PATH, log_eng_lines, LOG_MAX_LINES);
+            if (enc == 0) enc = log_read_lines(LOG_PATH_TMP, log_eng_lines, LOG_MAX_LINES);
+            /* 两路归并（各自按时间有序） */
+            char *out = malloc(131072);
+            if (!out) {
+                snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\n\n");
+                break;
             }
-            if (ln > 0 && lbuf[ln-1] != '\n') lbuf[ln++] = '\n';
-            FILE *lf = fopen(LOG_PATH, "r");
-            if (!lf) lf = fopen(LOG_PATH_TMP, "r");
-            if (lf) {
-                size_t el = fread(lbuf + ln, 1, sizeof(lbuf) - 1 - ln, lf);
-                ln += el;
-                fclose(lf);
+            size_t ol = 0;
+            int i = 0, j = 0;
+            while ((i < anc || j < enc) && ol < 131072 - LOG_MAX_LEN) {
+                const char *pick = NULL;
+                if (i < anc && j < enc) {
+                    pick = (log_ts_ms(log_app_lines[i]) <= log_ts_ms(log_eng_lines[j]))
+                               ? log_app_lines[i++] : log_eng_lines[j++];
+                } else if (i < anc) {
+                    pick = log_app_lines[i++];
+                } else {
+                    pick = log_eng_lines[j++];
+                }
+                size_t pl = strlen(pick);
+                memcpy(out + ol, pick, pl); ol += pl;
+                out[ol++] = '\n';
             }
-            lbuf[ln] = '\0';
-            /* 取尾部 */
-            char *tail = lbuf + ln;
+            out[ol] = 0;
+            /* 取尾部 400 行 */
+            char *tail = out + ol;
             int lines = 0;
-            while (tail > lbuf && lines < 400) {
+            while (tail > out && lines < 400) {
                 tail--;
                 if (*tail == '\n') lines++;
             }
@@ -415,6 +476,7 @@ static void handle_client(int cfd) {
             snprintf(reply, sizeof(reply),
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                 tl, tail);
+            free(out);
         } else if (strncmp(path, "/hud", 4) == 0) {
             /* 远程诊断：HUD 存活标记 + 崩溃 stderr（HUD 是独立进程，这里读它的文件） */
             char hbuf[4096] = {0};

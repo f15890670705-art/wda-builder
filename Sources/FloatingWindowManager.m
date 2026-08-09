@@ -93,7 +93,9 @@
    ball-shown 全丢了）；落盘后引擎就绪 /log 端点合并读取。② 异步 HTTP。
    ★ v1.8.11 节流：同一条 msg 15 秒内只上报一次（用户铁证"手机发烫"——
    切后台系统强压 hidden 时 hidden-revive 每 0.5s 刷一次 = 每秒 2 次写文件
-   +2 次 HTTP，直接发烫！节流后最多 15s 一次）。 */
+   +2 次 HTTP，直接发烫！节流后最多 15s 一次）。
+   ★ v1.8.14 日志整理：去掉 HTTP 上报（引擎 /log 直接读文件，HTTP 造成
+   同一事件出现两遍的重复日志）。只写文件，格式 [HH:mm:ss.SSS] [app] msg。 */
 - (void)reportToEngine:(NSString *)msg {
     static NSMutableDictionary *lastSent = nil;
     static dispatch_once_t once;
@@ -115,19 +117,12 @@
             [fh seekToEndOfFile];
             NSDateFormatter *df = [NSDateFormatter new];
             df.dateFormat = @"HH:mm:ss.SSS";
-            NSString *line = [NSString stringWithFormat:@"[%@] %@\n",
+            NSString *line = [NSString stringWithFormat:@"[%@] [app] %@\n",
                               [df stringFromDate:[NSDate date]], msg];
             [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
             [fh closeFile];
         }
     } @catch (NSException *e) { }
-
-    NSString *enc = [msg stringByAddingPercentEncodingWithAllowedCharacters:
-                        [NSCharacterSet alphanumericCharacterSet]];
-    NSString *url = [NSString stringWithFormat:@"http://127.0.0.1:8080/applog?msg=%@", enc];
-    NSURLSessionDataTask *t = [[NSURLSession sharedSession]
-        dataTaskWithURL:[NSURL URLWithString:url] completionHandler:nil];
-    [t resume];
 }
 
 - (void)showFloatingBall {

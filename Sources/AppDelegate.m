@@ -205,7 +205,7 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
             [fh seekToEndOfFile];
             NSDateFormatter *df = [NSDateFormatter new];
             df.dateFormat = @"HH:mm:ss.SSS";
-            NSString *line = [NSString stringWithFormat:@"[%@] %@\n",
+            NSString *line = [NSString stringWithFormat:@"[%@] [app] %@\n",
                               [df stringFromDate:[NSDate date]], msg];
             [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
             [fh closeFile];

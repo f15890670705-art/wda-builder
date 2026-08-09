@@ -434,8 +434,9 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [self pollEngineReady];
     }
 
-    /* 3. 每秒刷新状态 */
-    [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
+    /* ★ v1.8.11 降频 1s→5s：refreshStatus 每秒做 unix socket STATUS + 设备
+       信息收集（sysctl），用户铁证"手机发烫"——UI 状态刷新 5s 一次足够 */
+    [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *t) {
         [self refreshStatus];
     }];
     [self refreshStatus];
@@ -614,8 +615,8 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     NSLog(@"[KeepAlive] background audio started (silence loop, vol=1.0)");
 
     /* 守护：AVAudioPlayer 可能被系统打断/停止（来电、其他 App 抢音频通道），
-       一旦停了 App 退后台就挂起 → 悬浮球消失。每 3 秒检查重新播放。 */
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+       一旦停了 App 退后台就挂起 → 悬浮球消失。★ v1.8.11 每 10 秒检查重新播放。 */
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         [self startKeepAliveWatchdog];
     });
@@ -626,7 +627,8 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [self.keepAlivePlayer play];
         NSLog(@"[KeepAlive] player stopped, re-play");
     }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+    /* ★ v1.8.11 降频 3s→10s：检查播放状态不需要每 3 秒（发热源之一） */
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         [self startKeepAliveWatchdog];
     });

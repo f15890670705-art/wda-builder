@@ -91,8 +91,19 @@
    ★ v1.8.5 双通道：① 写本地文件 /tmp/ailintouch_app.log —— App 启动瞬间
    引擎可能还没 spawn/监听 8080，HTTP 会静默失败（用户铁证"app启动的时候
    引擎二进制还没有启动怎么可能有日志"！启动关键上报 root-scene-ok/
-   ball-shown 全丢了）；落盘后引擎就绪 /log 端点合并读取。② 异步 HTTP。 */
+   ball-shown 全丢了）；落盘后引擎就绪 /log 端点合并读取。② 异步 HTTP。
+   ★ v1.8.11 节流：同一条 msg 15 秒内只上报一次（用户铁证"手机发烫"——
+   切后台系统强压 hidden 时 hidden-revive 每 0.5s 刷一次 = 每秒 2 次写文件
+   +2 次 HTTP，直接发烫！节流后最多 15s 一次）。 */
 - (void)reportToEngine:(NSString *)msg {
+    static NSMutableDictionary *lastSent = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ lastSent = [NSMutableDictionary new]; });
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    NSNumber *last = lastSent[msg];
+    if (last && (now - last.doubleValue) < 15.0) return;
+    lastSent[msg] = @(now);
+
     @try {
         NSString *appLog = @"/tmp/ailintouch_app.log";
         NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:appLog];
@@ -238,7 +249,7 @@
 
     /* 触摸轮询：引擎(root)全局监听 HID 触摸，把坐标写 /tmp/ailintouch.touch，
        App 每 50ms 读一次，命中球区域触发 onTap（懒人同款机制，后台也能点） */
-    self.touchTimer = [NSTimer scheduledTimerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *t) {
+    self.touchTimer = [NSTimer scheduledTimerWithTimeInterval:0.15 repeats:YES block:^(NSTimer *t) {
         [self pollTouchFile];
     }];
 
@@ -253,7 +264,7 @@
        我们前台 App 进后台 WindowServer 会回收/更换 contextID（用户铁证：
        第一次装球全局 → App 进后台 → 永远内部）。windowContextID 每次重新取
        新值，心跳注册会自动用新 cid（cid 没变则重复注册同一 cid 幂等无害）。 */
-    self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *t) {
+    self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:15.0 repeats:YES block:^(NSTimer *t) {
         [self reportToEngine:@"hb-alive"];
         if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
         [self registerToSpringBoardWithRetry];
@@ -265,7 +276,7 @@
           NSRunLoopCommonModes 保证后台模式也触发（NSTimer 默认 default mode
           在后台 runloop 可能不回调）。懒人 daemon 窗口永活，我们前台 App
           必须主动维持。 */
-    self.hiddenKeepTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) {
+    self.hiddenKeepTimer = [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:YES block:^(NSTimer *t) {
         if (self.floatingWindow && self.floatingWindow.hidden) {
             self.floatingWindow.hidden = NO;
             [self reportToEngine:@"hidden-revive"];
@@ -277,7 +288,7 @@
        前台的scene"）。若 root scene 绑定失败（bindScene=main scene），
        动态把球窗口切到前台激活的 scene；切后台后自己进程无 active scene
        则不动作（保留 root scene 方案为主，此为兜底）。 */
-    self.sceneFollowTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
+    self.sceneFollowTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer *t) {
         if (!self.floatingWindow) return;
         UIWindowScene *active = nil;
         for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {

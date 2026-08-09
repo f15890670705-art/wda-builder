@@ -468,6 +468,11 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     signal(SIGSEGV, signal_crash_handler);
     signal(SIGBUS, signal_crash_handler);
 
+    /* ★ v1.8.58 legacy 模式（无 SceneManifest）：主窗口由 AppDelegate 直接建
+       （照开源 Letterpress：正规 app + legacy，悬浮球窗口不绑 scene 才能
+       SBS 注册 → 切后台全局）。AilinTouchSceneDelegate 不再被调用。 */
+    [self buildMainWindow];
+
     /* App 打开上报（无条件）：日志里必须有这条，否则说明 App 没起来/没跑新版本 */
     BOOL stopped = [[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED];
     NSLog(@"[AilinTouch] app-open stopped=%d ver=%@", stopped,
@@ -506,6 +511,40 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     [self refreshStatus];
 
     return YES;
+}
+
+/* ★ v1.8.58 legacy 模式主窗口构建（照开源 Letterpress 架构：正规 app +
+   legacy 无 SceneManifest → 悬浮球窗口不绑 scene + SBS 注册 = 切后台全局） */
+- (void)buildMainWindow {
+    @try {
+        UIWindow *win = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        win.backgroundColor = [UIColor whiteColor];
+
+        ControlPanelViewController *controlVC = [ControlPanelViewController new];
+        ServiceManagerViewController *serviceVC = [ServiceManagerViewController new];
+
+        ATTabBarController *tabBar = [[ATTabBarController alloc]
+            initWithViewControllers:@[controlVC, serviceVC]
+                            titles:@[@"控制面板", @"服务管理"]
+                           symbols:@[@"house.fill", @"gearshape.fill"]];
+        UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:tabBar];
+        nav.navigationBar.hidden = YES;   /* 自绘标题 */
+        win.rootViewController = nav;
+        [win makeKeyAndVisible];
+        self.window = win;
+
+        /* 发 sceneReady 通知（scene 传 nil → 球走 legacy 不绑 scene 路径） */
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"AilinTouchSceneReady"
+                                                            object:nil
+                                                          userInfo:@{
+                                                            @"nav": nav,
+                                                            @"controlVC": controlVC,
+                                                            @"serviceVC": serviceVC,
+                                                          }];
+        [self appTrace:@"legacy-main-window-ok"];
+    } @catch (NSException *e) {
+        [self appTrace:[NSString stringWithFormat:@"legacy-main-window-ex-%@", e.name]];
+    }
 }
 
 /* AilinTouchSceneDelegate 建好窗口后回调：接住 VC 引用 + 绑定按钮回调 */

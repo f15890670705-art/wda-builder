@@ -207,11 +207,21 @@
        确认我们环境（TrollStore + 前台 App）下 WindowServer 不给不绑 scene
        窗口分配 contextID，daemon 化无此能力，懒人靠的是别的机制（其窗口
        在 RootService daemon 进程中）。不再尝试，直接绑 scene 保证显示。 */
-    self.floatingWindow = [[FloatingBallWindow alloc] initWithWindowScene:bindScene];
-    if (!self.floatingWindow) {
-        /* 兜底：scene 为 nil 时退回旧姿势 */
+    /* ★ v1.8.58 legacy 模式（App 无 SceneManifest，scene 传 nil）：窗口
+       initWithFrame 不绑 scene（照开源 Letterpress TRHud）——legacy 无 scene
+       生命周期，窗口直接 WindowServer 拿 cid → SBS 注册 → SpringBoard 托管
+       → 切后台全局。scene-based 时走 initWithWindowScene: 绑 scene。 */
+    if (bindScene) {
+        self.floatingWindow = [[FloatingBallWindow alloc] initWithWindowScene:bindScene];
+        if (!self.floatingWindow) {
+            /* 兜底：scene 为 nil 时退回旧姿势 */
+            self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
+            self.floatingWindow.windowScene = bindScene;
+        }
+    } else {
+        /* legacy：不绑 scene（Letterpress 同款） */
         self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
-        self.floatingWindow.windowScene = bindScene;
+        [self reportToEngine:@"ball-legacy-no-scene"];
     }
     self.floatingWindow.windowLevel = 20000002;
     self.floatingWindow.backgroundColor = [UIColor clearColor];

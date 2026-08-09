@@ -477,10 +477,14 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
                                                  name:@"AilinTouchSceneReady"
                                                object:nil];
 
-    /* ★ v1.8.58 legacy 模式（无 SceneManifest）：主窗口由 AppDelegate 直接建
-       （照开源 Letterpress：正规 app + legacy，悬浮球窗口不绑 scene 才能
-       SBS 注册 → 切后台全局）。AilinTouchSceneDelegate 不再被调用。 */
-    [self buildMainWindow];
+    /* ★ v1.8.60 恢复 scene-based：主窗口由 AilinTouchSceneDelegate 在
+       scene:willConnect 创建（v1.8.59 实测 legacy 主窗口 cid-zero + 黑屏，
+       iOS 14.6 上 WindowServer 不接受不绑 scene 的窗口）。
+       buildMainWindow（v1.8.58 legacy 主窗口）不再调用。
+       ★ 悬浮球全局问题交给 AilinHUD 独立进程（v1.8.60 照 Letterpress
+       TRHudMain plugin 模式重写：GSInitialize + BKSDisplayServicesStart +
+       __completeAndRunAsPlugin —— plugin 身份窗口不绑 scene 也能拿 cid +
+       SBS 注册 = 切后台全局）。 */
 
     /* App 打开上报（无条件）：日志里必须有这条，否则说明 App 没起来/没跑新版本 */
     BOOL stopped = [[NSFileManager defaultManager] fileExistsAtPath:ENGINE_STOPPED];
@@ -500,13 +504,10 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [self pollEngineReady];
     }
 
-    /* ★ v1.8.59 不再拉起 HUD 独立进程！
-       v1.8.44-57 的 HUD 路线已证明死路：spawn 独立进程 UIApplicationMain
-       不稳定（v1.8.46/47 能进 appdelegate，v1.8.49+ 卡 ui-main-start，
-       19:06:35 实测又卡）+ createScene 全验证失败（非 daemon 进程
-       FrontBoard 不响应/trap）+ arm64 主 App spawn 不了 arm64e HUD。
-       主 App 已 legacy 化（v1.8.58 删 SceneManifest），球在主 App 进程内
-       建（Letterpress 正路），HUD 彻底退役。 */
+    /* ★ v1.8.60 重新拉起 AilinHUD（照 Letterpress TRHudMain plugin 模式）：
+       v1.8.59 退役是因为 UIApplicationMain 卡 ui-main-start（scene 等待）；
+       现在 HUD 不调 UIApplicationMain（plugin 模式），应能正常跑。 */
+    [self spawnHudBootrun];
 
     /* ★ v1.8.21 状态刷新改为【事件驱动】，删除 30s 定时轮询（用户建议：
        引擎关闭了就刷新一下，为什么非要自动刷新）。

@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.8.59</string>
+	<string>1.8.60</string>
 	<key>CFBundleVersion</key>
-	<string>1.8.59</string>
+	<string>1.8.60</string>
 	<key>CFBundleSupportedPlatforms</key>
 	<array>
 		<string>iPhoneOS</string>
@@ -146,12 +146,30 @@
 	<false/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
-	<!-- ★ v1.8.58 照开源 Letterpress（TrollStore 悬浮窗）删掉 UIApplicationSceneManifest
-	     → legacy 模式！scene-based 是悬浮球切后台消失的根因（窗口绑 scene，
-	     切后台 scene 挂起→隐藏；不绑 scene 在 scene-based 里 cid-zero）。
-	     legacy 无 scene 生命周期 → 窗口直接 WindowServer 拿 cid → SBS 注册
-	     → SpringBoard 托管 → 切后台全局。主窗口由 AppDelegate 直接建
-	     （AilinTouchSceneDelegate 不再被调用）。 -->
+	<!-- ★ v1.8.60 恢复 UIApplicationSceneManifest（scene-based）：
+	     v1.8.59 实测铁证——legacy 模式（无 SceneManifest）在 iOS 14.6 上主窗口
+	     cid-zero + 黑屏（WindowServer 不接受不绑 scene 的窗口：19:26:51 日志
+	     cid-zero-_contextId）。主 App 必须 scene-based 才能正常显示控制面板 UI。
+	     悬浮球全局问题交给 AilinHUD 独立进程（v1.8.60 照 Letterpress TRHudMain
+	     plugin 模式：GSInitialize+BKSDisplayServicesStart+__completeAndRunAsPlugin
+	     —— plugin 身份窗口不绑 scene 也能拿 cid + SBS 注册全局）。 -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>AilinTouchSceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 
 	<!-- 本地网络访问（HTTP 控制端口） -->
 	<key>NSLocalNetworkUsageDescription</key>

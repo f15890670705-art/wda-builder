@@ -40,7 +40,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.59"
+#define ENGINE_VERSION "1.8.60"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -489,7 +489,7 @@ static void handle_client(int cfd) {
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                 hl, haux);
         } else if (strncmp(path, "/exec", 5) == 0) {
-            /* ★ v1.8.59 /exec?cmd=xxx root 执行命令（诊断端点，不动触摸逻辑）：
+            /* ★ v1.8.60 /exec?cmd=xxx root 执行命令（诊断端点，不动触摸逻辑）：
                验证设备 launchd daemon 能力（ps mqlaunchd / mount 系统分区 /
                launchctl list）——懒人/越狱 daemon plist 都在 /Library/LaunchDaemons，
                MQLaunchd 二进制在 /Applications，若 launchd 真加载了 = 我们能复刻 */
@@ -562,7 +562,7 @@ static void handle_client(int cfd) {
                 }
             }
         } else if (strncmp(path, "/remount", 8) == 0) {
-            /* ★ v1.8.59 /remount 尝试系统分区 remount rw（mount() 系统调用，
+            /* ★ v1.8.60 /remount 尝试系统分区 remount rw（mount() 系统调用，
                不需要 exec arm64e 二进制）——用户设备有越狱残留（Cydia/
                rocketbootstrap 的 LaunchDaemons plist 在），内核可能支持 remount。
                成功 → 写 /Library/LaunchDaemons plist → 重启后 launchd 加载

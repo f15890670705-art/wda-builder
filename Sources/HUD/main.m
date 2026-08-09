@@ -16,9 +16,92 @@
 #import <sys/stat.h>
 #import <sys/wait.h>
 #import <signal.h>
+#import <dlfcn.h>
 #import "HUDAppDelegate.h"
 
 extern char **environ;   /* v1.8.47 posix_spawn launchctl 用 */
+
+/* ★ v1.8.60 照开源 Letterpress TRHudMain 私有 API（dlsym 动态解析，避免
+   构建机链接私有 framework 失败）。这些是 iOS 悬浮窗的终极启动姿势：
+   GSInitialize + BKSDisplayServicesStart + UIApplicationInitialize +
+   UIApplicationInstantiateSingleton + __completeAndRunAsPlugin + CFRunLoopRun
+   —— 完全不经过 UIApplicationMain 的 scene 生命周期（v1.8.44-59 卡
+   ui-main-start / legacy cid-zero 的根因），以 plugin 身份运行。 */
+typedef void (*fn_void)(void);
+typedef void (*fn_void_id)(id);
+
+static fn_void s_GSInitialize;
+static fn_void s_BKSDisplayServicesStart;
+static fn_void s_UIApplicationInitialize;
+static fn_void_id s_UIApplicationInstantiateSingleton;
+
+static BOOL hud_load_privates(void) {
+    void *h = NULL;
+    h = dlopen("/System/Library/PrivateFrameworks/GraphicsServices.framework/GraphicsServices",
+               RTLD_NOW | RTLD_GLOBAL);
+    if (h) s_GSInitialize = (fn_void)dlsym(h, "GSInitialize");
+
+    h = dlopen("/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices",
+               RTLD_NOW | RTLD_GLOBAL);
+    if (h) s_BKSDisplayServicesStart = (fn_void)dlsym(h, "BKSDisplayServicesStart");
+
+    h = dlopen("/System/Library/Frameworks/UIKit.framework/UIKit",
+               RTLD_NOW | RTLD_GLOBAL);
+    if (h) {
+        s_UIApplicationInitialize = (fn_void)dlsym(h, "UIApplicationInitialize");
+        s_UIApplicationInstantiateSingleton = (fn_void_id)dlsym(h, "UIApplicationInstantiateSingleton");
+    }
+    /* UIApplicationInitialize 实际在 UIKit 里；个别 iOS 版本放 BackBoardServices */
+    if (!s_UIApplicationInitialize) {
+        h = dlopen("/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices",
+                   RTLD_NOW | RTLD_GLOBAL);
+        if (h) s_UIApplicationInitialize = (fn_void)dlsym(h, "UIApplicationInitialize");
+    }
+    hud_mark([NSString stringWithFormat:@"priv-gs=%d bks=%d uiappinit=%d uiappsing=%d",
+              s_GSInitialize != NULL, s_BKSDisplayServicesStart != NULL,
+              s_UIApplicationInitialize != NULL, s_UIApplicationInstantiateSingleton != NULL]);
+    return s_GSInitialize && s_BKSDisplayServicesStart &&
+           s_UIApplicationInitialize && s_UIApplicationInstantiateSingleton;
+}
+
+/* UIApplication 私有方法（Letterpress UIApplication+Private.h 同款） */
+@interface UIApplication (HUDPrivate)
+- (void)_accessibilityInit;
+- (void)__completeAndRunAsPlugin;
+@end
+
+/* ★ v1.8.60 TRHudMain plugin 模式启动（照 Letterpress TRHudApp.mm TRHudMain 完整序列）。
+   不调 UIApplicationMain！GSInitialize + BKSDisplayServicesStart（拿 BackBoard 显示
+   身份）→ UIApplicationInitialize + UIApplicationInstantiateSingleton（手动实例化
+   UIApplication）→ setDelegate → _accessibilityInit → __completeAndRunAsPlugin
+   （以 plugin 身份运行，绕开 iOS 13+ scene 生命周期）→ CFRunLoopRun。
+   didFinish 里窗口 initWithFrame 不绑 scene + _isWindowServerHostingManaged=NO
+   + _contextId + SBS 注册 = 全局悬浮球（Letterpress TrollStore 实测正路）。 */
+static int hud_main_as_plugin(HUDAppDelegate *delegate) {
+    hud_mark(@"plugin-main-start");
+    if (!hud_load_privates()) {
+        hud_mark(@"plugin-priv-load-fail");
+        return 1;
+    }
+    if (s_GSInitialize) s_GSInitialize();
+    hud_mark(@"gs-init-ok");
+    if (s_BKSDisplayServicesStart) s_BKSDisplayServicesStart();
+    hud_mark(@"bks-display-ok");
+    if (s_UIApplicationInitialize) s_UIApplicationInitialize();
+    hud_mark(@"uiapp-init-ok");
+    if (s_UIApplicationInstantiateSingleton) s_UIApplicationInstantiateSingleton([UIApplication class]);
+    hud_mark(@"uiapp-singleton-ok");
+
+    UIApplication *app = [UIApplication sharedApplication];
+    [app setDelegate:delegate];
+    [app _accessibilityInit];
+    hud_mark(@"delegate-set");
+    [app __completeAndRunAsPlugin];
+    hud_mark(@"plugin-run");
+    CFRunLoopRun();
+    hud_mark(@"runloop-exited");
+    return 0;
+}
 
 /* 诊断辅助：写 /tmp/ailintouch_hud.alive（引擎 /hud 可读）+ /tmp/ailintouch_hud.log
    （引擎 /log?src=hud 可读，带 [HH:mm:ss.SSS] 时间戳）。全部依赖文件，无网络。 */
@@ -110,26 +193,13 @@ int main(int argc, char *argv[]) {
     @autoreleasepool {
         signal(SIGPIPE, SIG_IGN);
         hud_mark(@"booting");
-        /* ★ v1.8.57 bootrun 调 UIApplicationMain（legacy 模式，无 SceneManifest）：
-           照开源 Letterpress（TrollStore 悬浮窗 TRHud）—— legacy app + 窗口
-           initWithFrame 不绑 scene + SBS 注册 = 全局悬浮球（无 scene 生命周期，
-           切后台不挂起）。v1.8.52 裸进程（无 UIApplication）createScene 卡死
-           （FrontBoard 不响应非 daemon），v1.8.44 scene-based 不稳定——legacy
-           + UIApplicationMain 是 Letterpress 验证过的正路。窗口在 didFinish
-           建（不绑 scene），SBS 注册全局。 */
-        if (argc >= 2 && strcmp(argv[1], "bootrun") == 0) {
-            hud_mark(@"ui-main-start");
-            /* 后台线程尝试 launchd（TrollStore 下会失败，无害） */
-            pthread_t lt;
-            pthread_create(&lt, NULL, hud_launchd_thread, NULL);
-            int rc = UIApplicationMain(argc, argv, nil,
-                NSStringFromClass([HUDAppDelegate class]));
-            hud_mark([NSString stringWithFormat:@"exited-%d", rc]);
-            return rc;
-        }
-        int rc = UIApplicationMain(argc, argv, nil,
-            NSStringFromClass([HUDAppDelegate class]));
-        hud_mark([NSString stringWithFormat:@"exited-%d", rc]);
-        return rc;
+        /* ★ v1.8.60 全部走 TRHudMain plugin 模式（不再 UIApplicationMain）：
+           v1.8.44-59 反复卡 ui-main-start（spawn 独立进程 + UIApplicationMain
+           = iOS 13+ 等 scene 连接卡死）。Letterpress TRHudMain 铁证：
+           手动 UIApplicationInitialize + __completeAndRunAsPlugin + CFRunLoopRun
+           —— plugin 身份运行，窗口不绑 scene 也能 WindowServer 接受（配合
+           _isWindowServerHostingManaged=NO）+ SBS 注册全局。 */
+        HUDAppDelegate *delegate = [HUDAppDelegate new];
+        return hud_main_as_plugin(delegate);
     }
 }

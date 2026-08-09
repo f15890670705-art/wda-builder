@@ -18,6 +18,33 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 
+/* ★ v1.8.60 照开源 Letterpress TRHudMainWindow 完整 override（TrollStore 悬浮窗
+   显示关键）：_isSystemWindow=YES 让系统当系统窗口；_isWindowServerHostingManaged=NO
+   = 窗口不归 WindowServer 常规托管 → 不依赖 scene 也能拿 contextID（v1.8.59
+   legacy 窗口 cid-zero 的解法）。+ 类方法 / - 实例方法照原样。 */
+@interface HUDMainWindow : UIWindow
+@end
+
+@implementation HUDMainWindow
++ (BOOL)_isSecure { return YES; }
++ (BOOL)_isSystemWindow { return YES; }
+- (BOOL)_isWindowServerHostingManaged { return NO; }
+- (BOOL)_ignoresHitTest { return YES; }
+- (BOOL)_isSecure { return YES; }
+- (BOOL)_shouldCreateContextAsSecure { return YES; }
+@end
+
+/* UIWindow 私有（Letterpress UIWindow+Private.h 同款） */
+@interface UIWindow (HUDPrivate)
+- (CAContext *)_boundContext;
+- (unsigned int)_contextId;
+@end
+
+/* CAContext 私有 */
+@interface CAContext (HUDPrivate)
+- (void)setSecure:(BOOL)secure;
+@end
+
 /* 诊断辅助：写 /tmp/ailintouch_hud.alive（引擎 /hud 可读）
    ★ v1.8.34 双写 /tmp/ailintouch_hud.log（引擎 /log?src=hud 可读，带时间戳） */
 static void hud_mark(NSString *msg) {
@@ -350,10 +377,11 @@ static UIWindow *g_manualWindow = nil;
        legacy 模式无 scene 生命周期 → 窗口直接 WindowServer 拿 cid → SBS 注册
        → SpringBoard 托管 → 切后台全局。不再 createScene（裸进程 v1.8.52 卡死）。 */
     @try {
-        /* 窗口：initWithFrame 不绑 scene（Letterpress 同款） */
-        self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        /* 窗口：HUDMainWindow（_isSystemWindow/_isWindowServerHostingManaged=NO，
+           Letterpress TRHudMainWindow 同款）+ initWithFrame 不绑 scene */
+        self.window = [[HUDMainWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
         self.window.backgroundColor = [UIColor clearColor];
-        self.window.windowLevel = 20000002.0;
+        self.window.windowLevel = 10000001.0;   /* Letterpress 同款 level */
         self.window.clipsToBounds = YES;
 
         UIViewController *vc = [UIViewController new];
@@ -369,6 +397,19 @@ static UIWindow *g_manualWindow = nil;
 
         [self.window makeKeyAndVisible];
         hud_mark(@"window-shown");
+
+        /* Letterpress 同款：_boundContext setSecure（拿 context 前先设安全） */
+        @try {
+            if ([self.window respondsToSelector:@selector(_boundContext)]) {
+                id boundCtx = [self.window _boundContext];
+                if (boundCtx && [boundCtx respondsToSelector:@selector(setSecure:)]) {
+                    [boundCtx setSecure:YES];
+                    hud_mark(@"bound-ctx-secure");
+                }
+            }
+        } @catch (NSException *e) {
+            hud_mark([NSString stringWithFormat:@"boundctx-ex-%@", e.name]);
+        }
 
         /* SBS 注册（照 Letterpress：_contextId + registerWindowWithContextID:atLevel:） */
         [self registerToSpringBoard];

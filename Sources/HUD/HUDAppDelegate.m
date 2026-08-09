@@ -400,7 +400,8 @@ static UIWindow *g_manualWindow = nil;
             if ([self.window respondsToSelector:@selector(_boundContext)]) {
                 id boundCtx = [self.window _boundContext];
                 if (boundCtx && [boundCtx respondsToSelector:@selector(setSecure:)]) {
-                    [boundCtx setSecure:YES];
+                    ((void(*)(id, SEL, BOOL))objc_msgSend)(boundCtx,
+                        NSSelectorFromString(@"setSecure:"), YES);
                     hud_mark(@"bound-ctx-secure");
                 }
             }

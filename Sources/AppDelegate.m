@@ -364,6 +364,7 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
     self.nav = note.userInfo[@"nav"];
     self.controlVC = note.userInfo[@"controlVC"];
     self.serviceVC = note.userInfo[@"serviceVC"];
+    UIWindowScene *scene = note.userInfo[@"scene"];
 
     __weak typeof(self) ws = self;
     /* ★ v1.5.2: 悬浮球点击回调 → 引擎命令（球在 App 内，FloatingWindowManager 管理）。
@@ -374,6 +375,17 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
         [ws forwardToEngine:@"BALL_TAP\n"];
         NSLog(@"[AilinTouch] ball tapped -> engine");
     };
+
+    /* ★ v1.8.3 球回主 App（v1.8.0-1.8.2 独立 AilinHUD 进程路线失败：
+       裸进程 UIApplicationMain 卡 booting，懒人 RootCore bootrun 分支
+       根本不调 UIApplicationMain 是铁证）。主 App 是正常安装注册的 App，
+       scene 合法 → 窗口能拿 contextID + binder 绑系统 root window。
+       这里用【延迟 0.5 秒】创建（懒人 setupHUDWindow 后 dispatch_after(0.5s)
+       再 registerHUDWindow 的时序），等 scene 完全稳定。 */
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [[FloatingWindowManager shared] showFloatingBallInScene:scene];
+    });
 
     self.serviceVC.onTapStart = ^{
         BOOL wasRunning = [ws engineAlive];

@@ -39,7 +39,10 @@
        registerHUDWindow。窗口在 App 完全启动、scene 稳定后才创建——
        不绑 scene 的窗口此时才能被 WindowServer 接受（v1.6.6 在 scene 刚
        连接时创建 → cid=0 球消失的根因）。
-       这里只发通知，由 AppDelegate didFinish 延迟 1 秒创建悬浮球。 */
+       ★ v1.8.3 球回主 App：AppDelegate sceneReady: 拿 scene 调
+       FloatingWindowManager showFloatingBallInScene:（v1.7.3 完整链路：
+       绑 scene 拿 contextID + binder 绑系统 root window + 心跳重注册）。
+       通知里带上 scene。 */
     [[NSNotificationCenter defaultCenter]
         postNotificationName:@"AilinTouchSceneReady"
                       object:nil
@@ -47,6 +50,7 @@
                         @"nav": nav,
                         @"controlVC": controlVC,
                         @"serviceVC": serviceVC,
+                        @"scene": scene,
                     }];
 }
 

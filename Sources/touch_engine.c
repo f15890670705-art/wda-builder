@@ -36,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.2"
+#define ENGINE_VERSION "1.8.3"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -590,6 +590,9 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *, int, uid_t)
 extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *, uid_t);
 extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *, uid_t);
 
+/* v1.8.3: 独立 HUD 进程路线废弃（裸进程 UIApplicationMain 卡 booting），
+   本函数保留供参考但不再调用 */
+__attribute__((unused))
 static void ensure_hud(void) {
     /* 引擎路径（App spawn 时在 App bundle 内）→ 主 App bundle 目录 */
     char self[1024] = {0};
@@ -766,14 +769,15 @@ int main(int argc, char *argv[]) {
     dispatch_resume(tcp_src);
     LOG("HTTP listening on :%d (root)", HTTP_PORT);
 
-    /* ★ v1.8.0 恢复拉起独立悬浮球进程 AilinHUD（照懒人 RootCore 反汇编铁证）：
-       懒人 RootCore（com.nx.RootCore）= 独立 UIApplication 进程（@_UIApplicationMain
-       + FBSceneManager 二进制 scene + UIRootWindowScenePresentationBinder + SBS 注册）。
-       悬浮球挂在二进制 scene 上 → 独立于主 App 生命周期 → 全局持久 + 卸载球还在。
-       AilinHUD 放主 App bundle 根目录（共享 Info.plist = 已安装身份 + BSServiceDomains
-       → FrontBoard 给 scene，不再卡 booting）。v1.5.2 误删（当时缺 BSServiceDomains）。 */
-    ensure_hud();
-    LOG("hud-spawned (v1.8.0 RootCore-style)");
+    /* ★ v1.8.3 悬浮球回主 App 进程（懒人 RootService 同款架构）：
+       懒人 RootCore main 反汇编铁证 —— bootrun 分支【根本不调 UIApplicationMain】！
+       posix_spawn 裸进程 + UIApplicationMain 永远卡 booting（v1.8.0-1.8.2 实测
+       hud_alive=booting），因为 FrontBoard 不认裸进程身份，scene 服务连不上。
+       懒人悬浮球 = RootService（主 App，正常安装注册、scene 合法）didFinish →
+       initializeWithHUD → setupHUDWindow 绘制。主 App 内球由 AppDelegate
+       sceneReady: 调 FloatingWindowManager showFloatingBallInScene: 创建。
+       这里不再 spawn AilinHUD（v1.8.0-1.8.2 的独立进程路线是死路，且会双球/僵尸）。 */
+    LOG("hud-in-app mode (v1.8.3), ball in main app, no separate HUD process");
 
     /* HID client 已在 hid_init 里 Schedule 到 main runloop；启动 runloop 驱动它 */
     CFRunLoopRun();

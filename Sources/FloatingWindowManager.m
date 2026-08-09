@@ -11,6 +11,8 @@
 //
 #import "FloatingWindowManager.h"
 #import "FloatingBall.h"
+#import <objc/message.h>
+#import <dlfcn.h>
 
 /* SBSAccessibilityWindowHostingController 私有类声明（运行时 NSClassFromString） */
 @interface SBSAccessibilityWindowHostingController : NSObject
@@ -74,6 +76,7 @@
 @property (nonatomic, strong) NSTimer *hbTimer;      /* v1.8.20 30s 心跳：只上报 hb-alive */
 @property (nonatomic, assign) unsigned int cachedCid;  /* 同一窗口 contextID 不变，拿到一次缓存复用 */
 @property (nonatomic, strong) UIWindowScene *detachedScene; /* v1.8.22 切后台脱离的 scene（回前台绑回） */
+@property (nonatomic, strong) id independentScene;   /* ★ v1.8.47 主 App 进程内创建的独立二进制 FBScene */
 @end
 
 @implementation FloatingWindowManager
@@ -231,6 +234,12 @@
 
     /* 立即注册（若 contextID 尚未分配会失败，走 retry 补齐） */
     [self registerToSpringBoardWithRetry];
+
+    /* ★ v1.8.47 主 App 进程内创建独立二进制 FBScene（主 App 是合法 app 身份，
+       FrontBoard 认可 → createScene 断言能过；HUD 独立进程 v1.8.42/45 断言
+       失败 FBSceneManager.m:462 就是身份问题）。创建成功 + binder 绑系统
+       root window 层 → 独立 scene 不随 app main scene 挂起 → 球切后台全局。 */
+    [self createIndependentFBScene];
 
     /* ★ v1.8.20 删除触摸轮询（touchTimer 0.15s 读文件）——高频文件 I/O
        卡顿源之一，且用户早已指出该方案不行。球点击保留前台 tap 手势，
@@ -398,6 +407,108 @@
     } @catch (NSException *e) {
         [self reportToEngine:@"binder-exception"];
     }
+}
+
+/* ★ v1.8.47 主 App 进程内创建独立二进制 FBScene + binder 绑系统 root window。
+   v1.8.42/45 在 HUD 独立进程（非 launchd daemon）createScene 断言失败
+   （FBSceneManager.m:462），主 App 是正常安装注册的 app（合法 FrontBoard
+   身份）→ createScene 应能成功。成功 → binder addScene 绑系统层 → 独立
+   scene 不随 app main scene 生命周期 → 球切后台全局（懒人 RootCore 机制）。 */
+- (void)createIndependentFBScene {
+    @try {
+        dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
+        dlopen("/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard", RTLD_NOW);
+    } @catch (NSException *e) { }
+
+    @try {
+        Class mgrCls = NSClassFromString(@"FBSceneManager");
+        if (!mgrCls) { [self reportToEngine:@"fb-mgr-missing"]; return; }
+        id manager = nil;
+        SEL sharedSel = NSSelectorFromString(@"sharedInstance");
+        if ([mgrCls respondsToSelector:sharedSel]) {
+            manager = ((id(*)(id, SEL))objc_msgSend)(mgrCls, sharedSel);
+        }
+        if (!manager) manager = ((id(*)(id, SEL))objc_msgSend)(mgrCls, NSSelectorFromString(@"new"));
+        if (!manager) { [self reportToEngine:@"fb-manager-fail"]; return; }
+
+        Class defCls = NSClassFromString(@"FBSMutableSceneDefinition");
+        if (!defCls) { [self reportToEngine:@"fb-def-missing"]; return; }
+        id def = ((id(*)(id, SEL))objc_msgSend)(defCls, NSSelectorFromString(@"new"));
+
+        /* v1.8.42 铁证：不设 identity（FBSMutableSceneIdentity init 抛异常） */
+
+        Class paramsCls = NSClassFromString(@"FBSMutableSceneParameters");
+        id params = paramsCls ? ((id(*)(id, SEL))objc_msgSend)(paramsCls, NSSelectorFromString(@"new")) : nil;
+        if (!params) { [self reportToEngine:@"fb-params-fail"]; return; }
+
+        SEL createSel = NSSelectorFromString(@"createSceneWithDefinition:initialParameters:");
+        if (![manager respondsToSelector:createSel]) { [self reportToEngine:@"fb-create-no-sel"]; return; }
+        [self reportToEngine:@"fb-create-start"];
+
+        /* 后台线程 + 3s 超时（v1.8.42 修复版，不阻塞主线程） */
+        __block id fbSceneBlock = nil;
+        __block BOOL createDone = NO;
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            @try {
+                fbSceneBlock = ((id(*)(id, SEL, id, id))objc_msgSend)(manager, createSel, def, params);
+            } @catch (NSException *e) {
+                [self reportToEngine:[NSString stringWithFormat:@"fb-create-ex-%@", e.name]];
+            }
+            createDone = YES;
+        });
+        for (int i = 0; i < 30 && !createDone; i++) usleep(100 * 1000);
+        id fbScene = fbSceneBlock;
+        [self reportToEngine:createDone ? (fbScene ? @"fb-scene-created" : @"fb-create-nil")
+                                       : @"fb-create-timeout-3s"];
+        if (!fbScene) return;
+        self.independentScene = fbScene;
+
+        /* binder 绑系统 root window 层（懒人 UIRootWindowScenePresentationBinder） */
+        @try {
+            Class binderCls = NSClassFromString(@"UIRootWindowScenePresentationBinder");
+            if (!binderCls) { [self reportToEngine:@"binder-missing"]; return; }
+            if (!self.rootBinder) {
+                self.rootBinder = ((id(*)(id, SEL))objc_msgSend)(binderCls, NSSelectorFromString(@"new"));
+                [self reportToEngine:@"binder-created"];
+            }
+            SEL addSel = NSSelectorFromString(@"addScene:");
+            if ([self.rootBinder respondsToSelector:addSel]) {
+                ((void(*)(id, SEL, id))objc_msgSend)(self.rootBinder, addSel, fbScene);
+                [self reportToEngine:@"binder-addscene-ok"];
+            } else {
+                [self reportToEngine:@"binder-no-addscene"];
+            }
+        } @catch (NSException *e) {
+            [self reportToEngine:@"binder-ex"];
+        }
+
+        /* 1s 后看 UIKit 是否为新 FBScene 建立了 UIWindowScene → 球窗口改绑它 */
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [self tryBindWindowToNewScene];
+        });
+    } @catch (NSException *e) {
+        [self reportToEngine:@"fb-outer-ex"];
+    }
+}
+
+/* 遍历 connectedScenes 找新出现的 UIWindowScene（非当前 main scene）→ 球窗口改绑它。
+   若 UIKit 为独立 FBScene 建立了 UIWindowScene，绑上后窗口脱离 app main scene
+   生命周期 → SBS 托管持续 → 切后台球全局。 */
+- (void)tryBindWindowToNewScene {
+    if (!self.floatingWindow) return;
+    UIWindowScene *current = self.floatingWindow.windowScene;
+    NSSet *scenes = [UIApplication sharedApplication].connectedScenes;
+    for (UIScene *s in scenes) {
+        if (![s isKindOfClass:[UIWindowScene class]]) continue;
+        if (s == (id)current) continue;
+        UIWindowScene *ws = (UIWindowScene *)s;
+        self.floatingWindow.windowScene = ws;
+        [self reportToEngine:@"ball-rebound-newscene"];
+        [self registerToSpringBoardWithRetry];
+        return;
+    }
+    [self reportToEngine:@"no-new-scene"];
 }
 
 /* App 回前台/活跃时调用：确保悬浮球仍注册在 SpringBoard。

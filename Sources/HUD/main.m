@@ -70,24 +70,27 @@ static void hud_copy_self(const char *dst) {
     chmod(dst, 0755);
 }
 
-/* 提交 launchd job（root 常驻 KeepAlive）—— 系统 daemon 身份。
-   ★ v1.8.46 修复：launch_msg 必须带 "command"="submit"（LAUNCHD_OP_SUBMIT）！
-   v1.8.44/45 实测 hud.log 里 launchd-submit-ok/fail 从未出现 = launch_msg 缺
-   command 字段直接卡死（launchd 等一个不存在的响应）。补上后才能真正把
-   HUD 注册成 launchd daemon —— 这是懒人 RootCore 能 createScene 成功的核心
-   （FBSceneManager.m:462 断言拒绝非 daemon 独立进程建 scene）。 */
+/* 提交 launchd job（root 常驻）—— 系统 daemon 身份。
+   ★ v1.8.47 改用 posix_spawn /bin/launchctl submit：
+   v1.8.46 实测 launch_msg（即使补 command=submit）依然卡死（iOS 14.6 老接口
+   对非 launchd 域进程不响应，launchd-submit-ok/fail 从未出现）→ HUD 没成
+   daemon → createScene 断言失败（FBSceneManager.m:462）。
+   launchctl submit -l label -p prog 不写 plist 文件（/Library 只读绕开），
+   root 直接向 launchd 注册 job。 */
 static void hud_ensure_launchd(void) {
     hud_copy_self(HUD_INSTALL_PATH);
-    launch_data_t msg = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
-    if (!msg) return;
-    launch_data_dict_insert(msg, launch_data_new_string("submit"), "command");
-    launch_data_dict_insert(msg, launch_data_new_string(HUD_LAUNCHD_LABEL), "label");
-    launch_data_dict_insert(msg, launch_data_new_string(HUD_INSTALL_PATH), "program");
-    launch_data_dict_insert(msg, launch_data_new_bool(1), "run_at_load");
-    launch_data_dict_insert(msg, launch_data_new_bool(1), "keep_alive");
-    launch_data_t resp = launch_msg(msg);
-    if (resp) { launch_data_free(resp); hud_mark(@"launchd-submit-ok"); }
-    else hud_mark(@"launchd-submit-fail");
+    pid_t pid = 0;
+    char *argv[] = {"/bin/launchctl", "submit", "-l",
+                    (char *)HUD_LAUNCHD_LABEL, "-p",
+                    (char *)HUD_INSTALL_PATH, NULL};
+    int rc = posix_spawn(&pid, "/bin/launchctl", NULL, NULL, argv, environ);
+    if (rc == 0) {
+        int st = 0;
+        waitpid(pid, &st, 0);
+        hud_mark(st == 0 ? @"launchctl-submit-ok" : @"launchctl-submit-nonzero");
+    } else {
+        hud_mark([NSString stringWithFormat:@"launchctl-spawn-fail-%d", rc]);
+    }
 }
 
 /* ★ v1.8.33 后台 launchd 提交线程（launch_msg 同步阻塞，放后台不阻塞主流程） */

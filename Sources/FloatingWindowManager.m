@@ -152,18 +152,47 @@
        懒人悬浮球窗口【优先绑定系统 root window scene】（UIRootSceneWindow
        持有的 scene，永远存在、永远激活）→ 不随 App 的 main scene 挂起 →
        切后台球不消失！v1.8.3 绑 main scene 切后台被系统强制隐藏的根因。
-       私有 API: [UIScreen mainScreen] 的 _rootWindowScene（UIWindowScene）。 */
+       ★ v1.8.7 修复：v1.8.6 用 KVC valueForKey:@"_rootWindowScene" 抛异常
+       （root-scene-ex-fallback-main，iOS15+ UIScreen 私有 API 变化）。
+       改【多 key + NSInvocation】动态调用 getter（懒人 safeGetWindowContextID
+       同款姿势），key 候选：_rootWindowScene / _rootSceneWindow / _rootScene /
+       _windowScene；_rootSceneWindow 是 UIWindow → 取其 windowScene。 */
     UIWindowScene *bindScene = windowScene;
-    @try {
-        id rootScene = [[UIScreen mainScreen] valueForKey:@"_rootWindowScene"];
-        if (rootScene && [rootScene isKindOfClass:[UIWindowScene class]]) {
-            bindScene = (UIWindowScene *)rootScene;
-            [self reportToEngine:@"root-scene-ok"];
-        } else {
-            [self reportToEngine:@"root-scene-nil-fallback-main"];
-        }
-    } @catch (NSException *e) {
-        [self reportToEngine:@"root-scene-ex-fallback-main"];
+    NSArray *rootKeys = @[@"_rootWindowScene", @"_rootSceneWindow",
+                          @"_rootScene", @"_windowScene"];
+    for (NSString *k in rootKeys) {
+        @try {
+            id v = nil;
+            SEL sel = NSSelectorFromString(k);
+            if ([[UIScreen mainScreen] respondsToSelector:sel]) {
+                NSMethodSignature *sig = [[UIScreen mainScreen] methodSignatureForSelector:sel];
+                if (sig && sig.methodReturnLength >= 4 && sig.methodReturnType[0] == '@') {
+                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                    [inv setTarget:[UIScreen mainScreen]];
+                    [inv setSelector:sel];
+                    [inv invoke];
+                    __unsafe_unretained id ret = nil;
+                    [inv getReturnValue:&ret];
+                    v = ret;
+                }
+            }
+            if (v) {
+                UIWindowScene *rs = nil;
+                if ([v isKindOfClass:[UIWindow class]]) {
+                    rs = ((UIWindow *)v).windowScene;
+                } else if ([v isKindOfClass:[UIWindowScene class]]) {
+                    rs = (UIWindowScene *)v;
+                }
+                if (rs) {
+                    bindScene = rs;
+                    [self reportToEngine:[NSString stringWithFormat:@"root-scene-ok-%@", k]];
+                    break;
+                }
+            }
+        } @catch (NSException *e) { }
+    }
+    if (bindScene == windowScene) {
+        [self reportToEngine:@"root-scene-nil-fallback-main"];
     }
 
     /* ★ v1.6.0 验证：必须 initWithWindowScene: 拿有效 _contextId（v1.6.0 前
@@ -322,14 +351,24 @@
             self.rootBinder = [[binderCls alloc] init];
             [self reportToEngine:@"binder-created"];
         }
-        /* addScene: 参数 = FBScene（windowScene 的私有 _fbScene / _scene ivar） */
+        /* addScene: 参数 = FBScene（windowScene 的私有 _fbScene / _scene ivar）。
+           ★ v1.8.7 修复：v1.8.6 用 valueForKey 拿 _fbScene 抛异常被吞 → nil →
+           fallback 传 windowScene → addScene 抛 binder-exception！
+           改用 NSInvocation 动态调用（懒人 safeGetWindowContextID 同款姿势）。 */
         id fbScene = nil;
-        @try {
-            fbScene = [windowScene valueForKey:@"_fbScene"];
-        } @catch (NSException *e) { }
-        if (!fbScene) {
+        for (NSString *k in @[@"_fbScene", @"_scene"]) {
             @try {
-                fbScene = [windowScene valueForKey:@"_scene"];
+                SEL sel = NSSelectorFromString(k);
+                if (![windowScene respondsToSelector:sel]) continue;
+                NSMethodSignature *sig = [windowScene methodSignatureForSelector:sel];
+                if (!sig || sig.methodReturnLength < 4 || sig.methodReturnType[0] != '@') continue;
+                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                [inv setTarget:windowScene];
+                [inv setSelector:sel];
+                [inv invoke];
+                __unsafe_unretained id ret = nil;
+                [inv getReturnValue:&ret];
+                if (ret) { fbScene = ret; break; }
             } @catch (NSException *e) { }
         }
         if (!fbScene) {

@@ -36,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.6"
+#define ENGINE_VERSION "1.8.7"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -383,26 +383,24 @@ static void handle_client(int cfd) {
                 snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{\"ok\":false}");
             }
         } else if (strncmp(path, "/log", 4) == 0) {
-            /* 返回引擎日志尾部 80 行（持久区优先，sandbox 实例降级 /tmp） */
+            /* ★ v1.8.7 启动流水在前：先读 App 日志（启动阶段流水），再读引擎
+               日志（持久区优先，sandbox 实例降级 /tmp）。尾部 80 行截断时
+               App 启动流水排最前面不被挤掉（v1.8.6 排后面被挤 → 用户看到
+               "app启动日志依然没有"）。 */
             char lbuf[16384] = {0};
             size_t ln = 0;
+            FILE *af = fopen("/tmp/ailintouch_app.log", "r");
+            if (af) {
+                ln = fread(lbuf, 1, sizeof(lbuf) - 1, af);
+                fclose(af);
+            }
+            if (ln > 0 && lbuf[ln-1] != '\n') lbuf[ln++] = '\n';
             FILE *lf = fopen(LOG_PATH, "r");
             if (!lf) lf = fopen(LOG_PATH_TMP, "r");
             if (lf) {
-                ln = fread(lbuf, 1, sizeof(lbuf) - 1, lf);
+                size_t el = fread(lbuf + ln, 1, sizeof(lbuf) - 1 - ln, lf);
+                ln += el;
                 fclose(lf);
-            }
-            /* ★ v1.8.5 合并 App 本地日志：App 启动瞬间引擎可能还没监听 8080，
-               HTTP 上报（/applog）全部静默失败 —— 用户铁证"app启动的时候引擎
-               二进制还没有启动怎么可能有日志"！App 端 reportToEngine 已双通道
-               落盘 /tmp/ailintouch_app.log，这里追加到引擎日志后一并返回。 */
-            if (ln < sizeof(lbuf) - 1) {
-                FILE *af = fopen("/tmp/ailintouch_app.log", "r");
-                if (af) {
-                    size_t al = fread(lbuf + ln, 1, sizeof(lbuf) - 1 - ln, af);
-                    ln += al;
-                    fclose(af);
-                }
             }
             lbuf[ln] = '\0';
             /* 取尾部 */

@@ -97,22 +97,24 @@ int main(int argc, char *argv[]) {
     @autoreleasepool {
         signal(SIGPIPE, SIG_IGN);
         hud_mark(@"booting");
-        /* ★ v1.8.36 bootrun 模式：先手动建球（不依赖 UIApplicationMain），
-           再调 UIApplicationMain（卡不卡无所谓——照 AutoGo floatball
-           installFloatingBallWindow 顺序）。TrollStore 环境无 launch daemon
-           （EROFS 铁证 v1.8.35），AilinHUD 由引擎 spawnRoot 拉起（root 独立
-           进程，无 scene 前后台概念）→ 球不随 App scene 挂起 → 切后台不消失。 */
+        /* ★ v1.8.37 bootrun 模式：手动建球 + CFRunLoopRun 驱动渲染。
+           v1.8.36 实测：manualInstallBall 后调 UIApplicationMain —— SBS 注册
+           成功（registered-cid）但球不显示 = 窗口没渲染（UIApplicationMain
+           卡在 scene 连接，runloop 没正常转，UIWindow 内容画不上去）。
+           ★ 修复：不调 UIApplicationMain，直接 CFRunLoopRun() —— runloop
+           正常转，CoreAnimation 驱动窗口渲染，球显示。 */
         if (argc >= 2 && strcmp(argv[1], "bootrun") == 0) {
             hud_mark(@"ui-main-start");
             /* 后台线程尝试 launchd（TrollStore 下会失败，无害） */
             pthread_t lt;
             pthread_create(&lt, NULL, hud_launchd_thread, NULL);
-            /* ★ 先手动建球（UIApplicationMain 前）—— 球显示不依赖 UIApplication */
+            /* 先手动建球（窗口 + 球 + FBScene/binder + SBS 注册） */
             [HUDAppDelegate manualInstallBall];
-            int rc = UIApplicationMain(argc, argv, nil,
-                NSStringFromClass([HUDAppDelegate class]));
-            hud_mark([NSString stringWithFormat:@"exited-%d", rc]);
-            return rc;
+            hud_mark(@"runloop-start");
+            /* ★ runloop 驱动渲染（不调 UIApplicationMain，绕开 scene 卡死） */
+            CFRunLoopRun();
+            hud_mark(@"runloop-exited");
+            return 0;
         }
         int rc = UIApplicationMain(argc, argv, nil,
             NSStringFromClass([HUDAppDelegate class]));

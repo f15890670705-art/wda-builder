@@ -85,16 +85,92 @@ static void *hud_http_thread(void *arg) {
     return NULL;
 }
 
+/* ---------- launch_msg 声明（提交 launchd job 系统 daemon 化，照懒人 mqlaunchd） ----------
+   不 exec 外部二进制（arm64e launchctl exec 失败，v1.8.15 实测），直接连 launchd socket。 */
+typedef struct _launch_data *launch_data_t;
+extern launch_data_t launch_msg(launch_data_t);
+extern launch_data_t launch_data_alloc(int);
+extern launch_data_t launch_data_free(launch_data_t);
+extern void launch_data_dict_insert(launch_data_t, launch_data_t, const char *);
+extern launch_data_t launch_data_new_string(const char *);
+extern launch_data_t launch_data_new_bool(int);
+#define LAUNCH_DATA_DICTIONARY 3
+
+#define HUD_INSTALL_PATH "/var/mobile/ailintouch_hud"
+#define HUD_LAUNCHD_LABEL "com.ailintouch.hud"
+
+/* 复制自身到固定路径（launchd job 的 program 路径） */
+static void hud_copy_self(const char *dst) {
+    char self[1024] = {0};
+    uint32_t sz = sizeof(self);
+    _NSGetExecutablePath(self, &sz);
+    if (strcmp(self, dst) == 0) return;
+    FILE *in = fopen(self, "rb");
+    if (!in) return;
+    FILE *out = fopen(dst, "wb");
+    if (!out) { fclose(in); return; }
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) fwrite(buf, 1, n, out);
+    fclose(out);
+    fclose(in);
+    chmod(dst, 0755);
+}
+
+/* 提交 launchd job（root 常驻 KeepAlive）—— 系统 daemon 身份 */
+static void hud_ensure_launchd(void) {
+    hud_copy_self(HUD_INSTALL_PATH);
+    launch_data_t msg = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+    if (!msg) return;
+    launch_data_dict_insert(msg, launch_data_new_string(HUD_LAUNCHD_LABEL), "label");
+    launch_data_dict_insert(msg, launch_data_new_string(HUD_INSTALL_PATH), "program");
+    launch_data_dict_insert(msg, launch_data_new_bool(1), "run_at_load");
+    launch_data_dict_insert(msg, launch_data_new_bool(1), "keep_alive");
+    launch_data_t resp = launch_msg(msg);
+    if (resp) { launch_data_free(resp); hud_mark(@"launchd-submit-ok"); }
+    else hud_mark(@"launchd-submit-fail");
+}
+
+/* 验证 8081 已被接管（launchd 副本在服务） */
+static int hud_verify_takeover(void) {
+    for (int i = 0; i < 10; i++) {
+        int s = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in sa = {0};
+        sa.sin_family = AF_INET;
+        sa.sin_port = htons(HUD_HTTP_PORT);
+        sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (connect(s, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
+            close(s);
+            return 1;
+        }
+        close(s);
+        usleep(300 * 1000);
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
     @autoreleasepool {
         hud_mark(@"booting");
-        /* ★ v1.8.25 bootrun 模式（照懒人 RootCore main argv 检查）：
-           AilinHUD 被拉起时传 bootrun → 纯 HTTP server，不调 UIApplicationMain
-           （UIApplicationMain 裸进程会卡 scene，v1.8.0-1.8.2 实测）。
-           ★ v1.8.26 修复：argc>=3 → argc>=2（主 App spawn 传 {路径, bootrun}
-           argc=2，原判断导致 bootrun 分支不进 → 卡 booting 实测 hud_alive=booting）*/
+        /* ★ v1.8.27 系统 daemon 化（照懒人 mqlaunchd 拉起 RootCore）：
+           launchd 副本（ppid=1，系统身份）直接跑 HTTP；手动实例提交
+           launchd job + 验证 8081 接管后退出（双保险：没接管就手动跑）。
+           ★ 关键：无 kill_old_instance —— v1.8.23 引擎竞态崩溃的根源是
+           互杀 + launchd 副本循环，AilinHUD 去掉它，两条干净路径。
+           系统身份是下一步副本用 UIApplicationMain 画球（不卡 booting）的前提。 */
         if (argc >= 2 && strcmp(argv[1], "bootrun") == 0) {
-            hud_mark(@"bootrun-http-mode");
+            int is_launchd = (getppid() == 1);
+            if (is_launchd) {
+                hud_mark(@"launchd-instance-run");
+            } else {
+                hud_mark(@"manual-instance");
+                hud_ensure_launchd();
+                if (hud_verify_takeover()) {
+                    hud_mark(@"launchd-takeover-exit");
+                    return 0;
+                }
+                hud_mark(@"manual-http-fallback");
+            }
             pthread_t th;
             pthread_create(&th, NULL, hud_http_thread, NULL);
             /* 主线程保活（HTTP server 在子线程跑） */

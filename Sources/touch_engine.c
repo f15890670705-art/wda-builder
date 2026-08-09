@@ -38,7 +38,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.31"
+#define ENGINE_VERSION "1.8.32"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -58,55 +58,6 @@ static void dlog(const char *fmt, ...) {
 }
 #define LOG(fmt, ...) dlog(fmt, ##__VA_ARGS__)
 
-/* ---------- v1.8.14 日志归并 ----------
-   /log 端点把 app log 与引擎日志【按时间戳归并排序】输出（各自按时间有序，
-   两路归并 O(n)），统一 [HH:mm:ss.SSS] 格式，解决时间倒挂/分块拼接。 */
-#define LOG_MAX_LINES 1024
-#define LOG_MAX_LEN   256
-static char log_app_lines[LOG_MAX_LINES][LOG_MAX_LEN];
-static char log_hud_lines[LOG_MAX_LINES][LOG_MAX_LEN];
-static char log_eng_lines[LOG_MAX_LINES][LOG_MAX_LEN];
-
-/* 解析行首 [HH:MM:SS.mmm]（兼容旧的 [HH:MM:SS]）→ 自当日 0 点的毫秒数 */
-static long long log_ts_ms(const char *line) {
-    if (!line || line[0] != '[') return 0;
-    int h = 0, m = 0, s = 0, ms = 0;
-    if (sscanf(line + 1, "%d:%d:%d", &h, &m, &s) != 3) return 0;
-    const char *cl = strchr(line, ']');
-    if (cl) {
-        for (const char *q = line + 1; q < cl; q++) {
-            if (*q == '.') { sscanf(q + 1, "%3d", &ms); break; }
-        }
-    }
-    return ((long long)h * 3600 + (long long)m * 60 + s) * 1000 + ms;
-}
-
-/* 读文件到行数组，返回行数 */
-static int log_read_lines(const char *path, char lines[][LOG_MAX_LEN], int max) {
-    FILE *f = fopen(path, "r");
-    if (!f) return 0;
-    char *buf = malloc(65536);
-    if (!buf) { fclose(f); return 0; }
-    size_t n = fread(buf, 1, 65535, f);
-    fclose(f);
-    buf[n] = 0;
-    int cnt = 0;
-    char *p = buf;
-    while (*p && cnt < max) {
-        char *nl = strchr(p, '\n');
-        size_t len = nl ? (size_t)(nl - p) : strlen(p);
-        if (len > 0 && len < LOG_MAX_LEN - 1) {
-            memcpy(lines[cnt], p, len);
-            lines[cnt][len] = 0;
-            cnt++;
-        }
-        if (!nl) break;
-        p = nl + 1;
-    }
-    free(buf);
-    return cnt;
-}
-
 /* ★ v1.8.31 单文件日志直接 dump 到 out（src= 分路用） */
 static size_t log_dump_file(const char *path, char *out, size_t cap) {
     FILE *f = fopen(path, "r");
@@ -116,6 +67,24 @@ static size_t log_dump_file(const char *path, char *out, size_t cap) {
     if (n > 0 && out[n-1] != '\n') out[n++] = '\n';
     out[n] = 0;
     return n;
+}
+
+/* ★ v1.8.32 分段输出：标题 + 文件内容（默认 /log 三段分开显示，用户批评合并难读） */
+static size_t log_dump_section(const char *title, const char *path, char *out, size_t cap) {
+    size_t tl = strlen(title);
+    if (tl + 2 > cap) return 0;
+    memcpy(out, title, tl);
+    out[tl] = '\n';
+    size_t ol = tl + 1;
+    FILE *f = fopen(path, "r");
+    if (f) {
+        size_t n = fread(out + ol, 1, cap - 2 - ol, f);
+        fclose(f);
+        ol += n;
+    }
+    if (ol == 0 || out[ol-1] != '\n') out[ol++] = '\n';
+    out[ol] = 0;
+    return ol;
 }
 
 /* 创建数据区目录结构（launchd 实例 = root 无 sandbox 可建；App spawn 实例 sandbox 内失败则日志落 /tmp） */
@@ -384,7 +353,7 @@ static void handle_client(int cfd) {
     ssize_t n = read(cfd, buf, sizeof(buf)-1);
     if (n <= 0) { close(cfd); return; }
 
-    char reply[131072];   /* ★ v1.8.14 /log 归并输出（app+引擎 400 行，128K）*/
+    char reply[262144];   /* ★ v1.8.32 /log 三段分开输出（每段 64K，128K→256K）*/
     /* HTTP 请求：GET /tap?x=..&y=.. HTTP/1.1 */
     if (strncmp(buf, "GET ", 4) == 0) {
         char path[256] = {0};
@@ -460,52 +429,32 @@ static void handle_client(int cfd) {
                 memcpy(srcv, sp, sl);
                 srcv[sl] = 0;
             }
-            char *out = malloc(131072);
+            char *out = malloc(262144);
             if (!out) {
                 snprintf(reply, sizeof(reply), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\n\n");
             } else {
             size_t ol = 0;
             if (strcmp(srcv, "app") == 0) {
-                ol = log_dump_file("/tmp/ailintouch_app.log", out, 131072);
+                ol = log_dump_file("/tmp/ailintouch_app.log", out, 262144);
             } else if (strcmp(srcv, "engine") == 0) {
-                ol = log_dump_file(LOG_PATH, out, 131072);
-                if (ol == 0) ol = log_dump_file(LOG_PATH_TMP, out, 131072);
+                ol = log_dump_file(LOG_PATH, out, 262144);
+                if (ol == 0) ol = log_dump_file(LOG_PATH_TMP, out, 262144);
             } else if (strcmp(srcv, "hud") == 0) {
-                ol = log_dump_file("/tmp/ailintouch_hud.log", out, 131072);
+                ol = log_dump_file("/tmp/ailintouch_hud.log", out, 262144);
             } else {
-            /* 三路归并（各自按时间有序，v1.8.14/1.8.30） */
-            int anc = log_read_lines("/tmp/ailintouch_app.log", log_app_lines, LOG_MAX_LINES);
-            int hnc = log_read_lines("/tmp/ailintouch_hud.log", log_hud_lines, LOG_MAX_LINES);
-            int enc = log_read_lines(LOG_PATH, log_eng_lines, LOG_MAX_LINES);
-            if (enc == 0) enc = log_read_lines(LOG_PATH_TMP, log_eng_lines, LOG_MAX_LINES);
-            int i = 0, j = 0, k = 0;
-            while ((i < anc || j < enc || k < hnc) && ol < 131072 - LOG_MAX_LEN) {
-                /* 三路里取时间最早的一条 */
-                const char *a = (i < anc) ? log_app_lines[i] : NULL;
-                const char *e = (j < enc) ? log_eng_lines[j] : NULL;
-                const char *h = (k < hnc) ? log_hud_lines[k] : NULL;
-                const char *pick = NULL;
-                long long ta = a ? log_ts_ms(a) : LLONG_MAX;
-                long long te = e ? log_ts_ms(e) : LLONG_MAX;
-                long long th = h ? log_ts_ms(h) : LLONG_MAX;
-                if (a && ta <= te && ta <= th)      { pick = a; i++; }
-                else if (e && te <= ta && te <= th) { pick = e; j++; }
-                else if (h)                          { pick = h; k++; }
-                if (!pick) break;
-                size_t pl = strlen(pick);
-                memcpy(out + ol, pick, pl); ol += pl;
-                out[ol++] = '\n';
+            /* ★ v1.8.32 默认 /log：三段分开显示（用户批评"合起来看起来还麻烦的一比"）——
+               === APP LOG === / === ENGINE LOG === / === HUD LOG === 各带标题独立段 */
+            size_t used = 0;
+            used += log_dump_section("========== APP LOG ==========", "/tmp/ailintouch_app.log", out + used, 262144 - used);
+            size_t el = log_dump_section("========== ENGINE LOG ==========", LOG_PATH, out + used, 262144 - used);
+            if (el == 0) el = log_dump_section("========== ENGINE LOG ==========", LOG_PATH_TMP, out + used, 262144 - used);
+            used += el;
+            used += log_dump_section("========== HUD LOG ==========", "/tmp/ailintouch_hud.log", out + used, 262144 - used);
+            ol = used;
             }
-            out[ol] = 0;
-            }
-            /* 取尾部 400 行 */
-            char *tail = out + ol;
-            int lines = 0;
-            while (tail > out && lines < 400) {
-                tail--;
-                if (*tail == '\n') lines++;
-            }
-            if (*tail == '\n') tail++;
+            /* ★ v1.8.32 不分段截断：分段输出已带标题，全量返回（缓冲 256K 内）
+               —— 截尾部 400 行会把段头截掉，用户看一半反而更乱 */
+            char *tail = out;
             size_t tl = strlen(tail);
             snprintf(reply, sizeof(reply),
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",

@@ -29,6 +29,7 @@ LDFLAGS = -arch $(ARCH) -isysroot $(SDK) \
           -framework CoreFoundation -framework CoreGraphics \
           -framework IOKit -framework QuartzCore \
           -framework AVFoundation -framework AudioToolbox \
+          -F $(SDK)/System/Library/PrivateFrameworks \
           -framework FrontBoardServices -framework FrontBoard
 
 APP_SOURCES  = Sources/main.m Sources/AppDelegate.m \

@@ -569,7 +569,7 @@
         /* 6. params 配置（懒人 0x100080c18~0x100080d1c：setForeground:1、
            setInterfaceOrientation:1、setLevel:1、setSettings:、setClientSettings:） */
         @try {
-            for (NSString *s in @[@"setForeground:", @"setInterfaceOrientation:"]) {
+            for (NSString *s in @[@"setForeground:", @"setInterfaceOrientation:", @"setLevel:"]) {
                 SEL sel = NSSelectorFromString(s);
                 if ([params respondsToSelector:sel]) {
                     ((void(*)(id, SEL, int))objc_msgSend)(params, sel, 1);
@@ -581,23 +581,19 @@
         if (![manager respondsToSelector:createSel]) { [self reportToEngine:@"fb-create-no-sel"]; return; }
         [self reportToEngine:@"fb-create-start"];
 
-        /* 后台线程 + 3s 超时（v1.8.42 修复版，不阻塞主线程） */
-        __block id fbSceneBlock = nil;
-        __block BOOL createDone = NO;
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            @try {
-                fbSceneBlock = ((id(*)(id, SEL, id, id))objc_msgSend)(manager, createSel, def, params);
-            } @catch (NSException *e) {
-                /* ★ v1.8.48 打 reason：拿 FBSceneManager.m:462 断言的完整消息 */
-                NSString *reason = [e.reason substringToIndex:MIN((NSUInteger)200, e.reason.length)];
-                [self reportToEngine:[NSString stringWithFormat:@"fb-create-ex-%@-%@", e.name, reason]];
-            }
-            createDone = YES;
-        });
-        for (int i = 0; i < 30 && !createDone; i++) usleep(100 * 1000);
-        id fbScene = fbSceneBlock;
-        [self reportToEngine:createDone ? (fbScene ? @"fb-scene-created" : @"fb-create-nil")
-                                       : @"fb-create-timeout-3s"];
+        /* ★★ v1.8.50 createScene 必须在【主线程】同步调用！
+           v1.8.49 实测铁证：fb-create-ex-...-this call must be made on the
+           main thread —— v1.8.42 加的后台线程+3s超时保护反而触发断言！
+           懒人 RootCore 反汇编（0x100080d40）也是主线程同步调用（无 dispatch）。
+           直接同步调用（配置齐全后应快速返回，v1.8.39 卡死是缺 spec 的连锁）。 */
+        id fbScene = nil;
+        @try {
+            fbScene = ((id(*)(id, SEL, id, id))objc_msgSend)(manager, createSel, def, params);
+            [self reportToEngine:fbScene ? @"fb-scene-created" : @"fb-create-nil"];
+        } @catch (NSException *e) {
+            NSString *reason = [e.reason substringToIndex:MIN((NSUInteger)200, e.reason.length)];
+            [self reportToEngine:[NSString stringWithFormat:@"fb-create-ex-%@-%@", e.name, reason]];
+        }
         if (!fbScene) return;
         self.independentScene = fbScene;
 

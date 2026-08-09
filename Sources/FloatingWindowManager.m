@@ -87,8 +87,31 @@
     return inst;
 }
 
-/* App 状态上报到引擎日志（远程 curl /log 可查 App 生命周期/存活） */
+/* App 状态上报到引擎日志（远程 curl /log 可查 App 生命周期/存活）。
+   ★ v1.8.5 双通道：① 写本地文件 /tmp/ailintouch_app.log —— App 启动瞬间
+   引擎可能还没 spawn/监听 8080，HTTP 会静默失败（用户铁证"app启动的时候
+   引擎二进制还没有启动怎么可能有日志"！启动关键上报 root-scene-ok/
+   ball-shown 全丢了）；落盘后引擎就绪 /log 端点合并读取。② 异步 HTTP。 */
 - (void)reportToEngine:(NSString *)msg {
+    @try {
+        NSString *appLog = @"/tmp/ailintouch_app.log";
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:appLog];
+        if (!fh) {
+            [[NSFileManager defaultManager] createFileAtPath:appLog
+                                                    contents:nil attributes:nil];
+            fh = [NSFileHandle fileHandleForWritingAtPath:appLog];
+        }
+        if (fh) {
+            [fh seekToEndOfFile];
+            NSDateFormatter *df = [NSDateFormatter new];
+            df.dateFormat = @"HH:mm:ss.SSS";
+            NSString *line = [NSString stringWithFormat:@"[%@] %@\n",
+                              [df stringFromDate:[NSDate date]], msg];
+            [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+            [fh closeFile];
+        }
+    } @catch (NSException *e) { }
+
     NSString *enc = [msg stringByAddingPercentEncodingWithAllowedCharacters:
                         [NSCharacterSet alphanumericCharacterSet]];
     NSString *url = [NSString stringWithFormat:@"http://127.0.0.1:8080/applog?msg=%@", enc];

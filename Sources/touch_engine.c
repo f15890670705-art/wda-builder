@@ -36,7 +36,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.4"
+#define ENGINE_VERSION "1.8.5"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -385,6 +385,19 @@ static void handle_client(int cfd) {
                 ln = fread(lbuf, 1, sizeof(lbuf) - 1, lf);
                 fclose(lf);
             }
+            /* ★ v1.8.5 合并 App 本地日志：App 启动瞬间引擎可能还没监听 8080，
+               HTTP 上报（/applog）全部静默失败 —— 用户铁证"app启动的时候引擎
+               二进制还没有启动怎么可能有日志"！App 端 reportToEngine 已双通道
+               落盘 /tmp/ailintouch_app.log，这里追加到引擎日志后一并返回。 */
+            if (ln < sizeof(lbuf) - 1) {
+                FILE *af = fopen("/tmp/ailintouch_app.log", "r");
+                if (af) {
+                    size_t al = fread(lbuf + ln, 1, sizeof(lbuf) - 1 - ln, af);
+                    ln += al;
+                    fclose(af);
+                }
+            }
+            lbuf[ln] = '\0';
             /* 取尾部 */
             char *tail = lbuf + ln;
             int lines = 0;
@@ -777,7 +790,7 @@ int main(int argc, char *argv[]) {
        initializeWithHUD → setupHUDWindow 绘制。主 App 内球由 AppDelegate
        sceneReady: 调 FloatingWindowManager showFloatingBallInScene: 创建。
        这里不再 spawn AilinHUD（v1.8.0-1.8.2 的独立进程路线是死路，且会双球/僵尸）。 */
-    LOG("hud-in-app mode (v1.8.3), ball in main app, no separate HUD process");
+    LOG("hud-in-app mode (v1.8.5), ball in main app, no separate HUD process");
 
     /* HID client 已在 hid_init 里 Schedule 到 main runloop；启动 runloop 驱动它 */
     CFRunLoopRun();

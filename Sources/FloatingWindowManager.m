@@ -206,41 +206,55 @@
         [self reportToEngine:@"root-scene-nil-fallback-main"];
     }
 
-    /* ★ v1.6.0 验证：必须 initWithWindowScene: 拿有效 _contextId（v1.6.0 前
-       initWithFrame + 手动赋值 windowScene → cid 垃圾值 reg-ok-3837087202）。 */
-    self.floatingWindow = [[FloatingBallWindow alloc] initWithWindowScene:bindScene];
-    if (!self.floatingWindow) {
-        /* 兜底：scene 为 nil 时退回旧姿势 */
-        self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
-        self.floatingWindow.windowScene = bindScene;
-    }
+    /* ★ v1.8.12 核心改动：先试【不绑 scene】窗口（懒人 setupHUDWindow 姿势：
+       initWithFrame + level 20000002 + makeKeyAndVisible + SBS 注册）。
+       懒人是 daemon（SBAppIsDaemon），WindowServer 给 daemon 的不绑 scene
+       窗口也分配 contextID，且【不受 scene 生命周期控制】→ 切后台不隐藏！
+       这就是懒人"切后台球还在"的机制。
+       v1.6.6/v1.7.2 不绑 scene 失败（cid=0）= 当时 daemon 化未生效
+       （SpringBoard 未重读 SBAppIsDaemon，必须重启手机——用户铁证"每次
+       重启手机他才真的重启"）。现在 daemon 化已生效，重试不绑 scene。
+       若仍拿不到 cid（daemon 化无效），自动 fallback 绑 scene（v1.8.3-11
+       已验证的可靠路径，球能显示只是切后台消失）。 */
+    BOOL noSceneMode = YES;
+    self.floatingWindow = [[FloatingBallWindow alloc] initWithFrame:full];
     self.floatingWindow.windowLevel = 20000002;
     self.floatingWindow.backgroundColor = [UIColor clearColor];
-
-    /* 轻量 root VC 承载悬浮球 */
     UIViewController *vc = [UIViewController new];
     vc.view.backgroundColor = [UIColor clearColor];
     self.floatingWindow.rootViewController = vc;
-
     FloatingBall *ball = [[FloatingBall alloc] initWithFrame:CGRectMake(x, y, size, size)];
     ball.onTap = self.onTap;
     [vc.view addSubview:ball];
     self.ball = ball;
-
-    /* ★ v1.5.6: makeKeyAndVisible（懒人同款）—— iOS13+ scene 模式多窗口共存，
-       窗口必须 makeKeyAndVisible 才会被 WindowServer 分配 contextID + SBS 托管。
-       v1.1.x 因 legacy 单窗口模式抢 key window 回退成 hidden=NO，
-       scene 模式下没有这个顾虑（主窗口仍 visible 显示）。 */
     [self.floatingWindow makeKeyAndVisible];
+    if ([self windowContextID] == 0) {
+        /* daemon 化未生效 / 不绑 scene 拿不到 cid → fallback 绑 scene */
+        [self reportToEngine:@"nosccene-cid-zero-fallback-scene"];
+        self.floatingWindow = nil;
+        self.floatingWindow = [[FloatingBallWindow alloc] initWithWindowScene:bindScene];
+        self.floatingWindow.windowLevel = 20000002;
+        self.floatingWindow.backgroundColor = [UIColor clearColor];
+        UIViewController *vc2 = [UIViewController new];
+        vc2.view.backgroundColor = [UIColor clearColor];
+        self.floatingWindow.rootViewController = vc2;
+        FloatingBall *ball2 = [[FloatingBall alloc] initWithFrame:CGRectMake(x, y, size, size)];
+        ball2.onTap = self.onTap;
+        [vc2.view addSubview:ball2];
+        self.ball = ball2;
+        [self.floatingWindow makeKeyAndVisible];
+        noSceneMode = NO;
+    } else {
+        [self reportToEngine:@"nosccene-cid-ok-daemon-mode"];
+    }
 
     /* ★ v1.7.3 恢复 binder 绑定（用户"二进制 scene"铁证）：
        懒人 RootService 含 UIRootWindowScenePresentationBinder +
        FBSceneManager + createSceneWithDefinition 符号 —— 窗口的二进制
        FBScene（windowScene._fbScene）addScene 到 binder → 窗口绑定到
        系统 root window scene → 全局显示且不随 App scene 挂起。
-       ★ v1.8.4 传 bindScene（系统 root scene 优先，懒人 UIRootSceneWindow
-       符号铁证：球绑系统 root window scene 才真正不随 App 生命周期）。 */
-    if (bindScene) {
+       ★ v1.8.12 只在绑 scene 路径用 binder（不绑 scene 的窗口无 scene 可绑） */
+    if (!noSceneMode && bindScene) {
         [self bindToRootWindowScene:bindScene];
     }
 

@@ -37,7 +37,7 @@ extern char **environ;
 #define LAUNCHD_PLIST "/Library/LaunchDaemons/com.ailintouch.engine.plist"
 #define LAUNCHD_LABEL "com.ailintouch.engine"
 #define STOPPED_MARKER "/tmp/ailintouch.stopped"
-#define ENGINE_VERSION "1.8.22"
+#define ENGINE_VERSION "1.8.23"
 
 static FILE *logfp;
 static void dlog(const char *fmt, ...) {
@@ -749,7 +749,6 @@ extern launch_data_t launch_data_new_string(const char *);
 extern launch_data_t launch_data_new_bool(int);
 #define LAUNCH_DATA_DICTIONARY 3
 
-__attribute__((unused))
 static int ensure_launchd(void) {
     if (copy_self(INSTALL_PATH) != 0) return -1;
 
@@ -821,12 +820,48 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    /* ★ v1.8.19 回滚 launchd handoff：App spawn 引擎直接跑（简单可靠）。
-       v1.8.15-18 的 launch_msg/launchctl 系统 daemon 方案导致引擎消失/
-       不稳定（用户暴怒"越修越垃圾"）—— launch_msg 老协议、arm64e exec、
-       handoff 竞争 8080 全是坑。回滚到 v1.8.14 模式：kill 旧实例保证
-       每次打开更新引擎，直接跑服务。launchd 常驻留待稳定后再说。 */
-    kill_old_instance();  /* 清旧实例（每次 App 打开都换新引擎，保证版本更新） */
+    /* ★ v1.8.23 照懒人成熟方案（RootCore 由 mqlaunchd 拉起为系统 daemon）：
+       引擎也提交 launchd job 成为系统 daemon（launch_msg + label，v1.8.17
+       修复未实测就回滚，现在恢复）。【双保险】：launchd 副本 3 秒内接管
+       8080 才 handoff 退出，否则继续手动实例跑 —— 引擎永远存在，绝不消失。
+       系统 daemon 身份（无 sandbox、无 scene 前后台）是后面拉起 AilinHUD
+       画全局球的根基（照懒人 RootCore 架构）。 */
+    int is_launchd = (getppid() == 1);
+    if (!is_launchd) {
+        /* App spawn 实例：先杀旧实例（含 launchd 常驻旧副本），再提交 launchd job */
+        kill_old_instance();
+        usleep(200 * 1000);
+        int rc = ensure_launchd();
+        if (rc == 0) {
+            /* 验证 launchd 副本真的接管 8080 才退出（3 秒 × 10 次） */
+            int takeover = 0;
+            for (int i = 0; i < 10; i++) {
+                int s = socket(AF_INET, SOCK_STREAM, 0);
+                struct sockaddr_in sa = {0};
+                sa.sin_family = AF_INET;
+                sa.sin_port = htons(HTTP_PORT);
+                sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                if (connect(s, (struct sockaddr*)&sa, sizeof(sa)) == 0) {
+                    close(s);
+                    takeover = 1;
+                    break;
+                }
+                close(s);
+                usleep(300 * 1000);
+            }
+            if (takeover) {
+                LOG("launchd takeover ok, exiting (system daemon running)");
+                return 0;
+            }
+            LOG("launchd NOT up, run as manual instance");
+        } else {
+            LOG("launchd install failed, run as manual instance");
+        }
+    } else {
+        LOG("launchd system daemon instance (ppid=1)");
+    }
+
+    kill_old_instance();  /* 清残留实例 */
 
     if (hid_init() != 0) { LOG("hid_init failed"); return 1; }
 

@@ -153,7 +153,17 @@ static void signal_crash_handler(int sig) {
     /* ★ v1.8.22 切后台让球窗口【脱离 scene】：不隐藏窗口没用（系统在 scene
        不激活时强制隐藏，用户实测：切后台球从全局变 App 内）。
        脱离 scene 后窗口不随 scene 隐藏，保留 contextID + SBS 托管 → 球继续全局。
-       回前台 applicationDidBecomeActive 绑回 scene。 */
+       回前台 applicationDidBecomeActive 绑回 scene。
+       ★ v1.8.40 打点：v1.8.39 实测本回调从未触发（daemon 化 App 不走标准
+       前后台转换，ball-detach-scene 从未出现）——心跳兜底在 hbTimer 里。 */
+    [self appTrace:@"did-enter-background"];
+    [[FloatingWindowManager shared] detachBallFromScene];
+}
+
+/* ★ v1.8.40 打点：willResignActive 通常比 didEnterBackground 先触发，
+   如果 daemon 化 App 触发这个，提前 detach 更及时 */
+- (void)applicationWillResignActive:(UIApplication *)application {
+    [self appTrace:@"will-resign-active"];
     [[FloatingWindowManager shared] detachBallFromScene];
 }
 

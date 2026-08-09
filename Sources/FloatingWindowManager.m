@@ -241,6 +241,14 @@
        心跳重复注册是浪费（v1.8.12 实测每次取 cid 都不同=注册也白注册）。 */
     self.hbTimer = [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer *t) {
         [self reportToEngine:@"hb-alive"];
+        /* ★ v1.8.40 心跳兜底检测后台：daemon 化 App 不触发
+           applicationDidEnterBackground（v1.8.39 实测 ball-detach-scene 从未
+           出现 = detach 没执行 = 切后台球被系统隐藏前没来得及脱离 scene）。
+           心跳里主动检查 applicationState：非 active 立即 detach（幂等）。 */
+        if (self.floatingWindow &&
+            [UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
+            [self detachBallFromScene];
+        }
     }];
 
     /* ★ v1.8.13 删除 hiddenKeepTimer：v1.8.12 实测 reg-ok 的 contextID 每

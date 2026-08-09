@@ -110,28 +110,22 @@ int main(int argc, char *argv[]) {
     @autoreleasepool {
         signal(SIGPIPE, SIG_IGN);
         hud_mark(@"booting");
-        /* ★ v1.8.52 bootrun 改回裸进程手动建球（不调 UIApplicationMain）：
-           v1.8.51 实测铁证：scene-based UIApplicationMain 行为不稳定（v1.8.44
-           能进 appdelegate，v1.8.51 卡在 ui-main-start 连 appdelegate 都不触发
-           —— HUD 日志 18:22:27.069 后无任何输出），且主 App v1.8.50 实测
-           createScene 在主 App（有 scene session）里 EXC_BREAKPOINT trap。
-           → 裸进程（无 UIApplicationMain、无 scene session 关联）反而最干净：
-           v1.8.42 裸进程已走到 fb-create-sel-ok（FBSceneManager 可用），当时
-           缺 identity/spec/params 才失败；现在三件套齐全 + 主线程调用，
-           createScene 应能成功（无 app scene 约束不会 trap）。
-           流程：manualInstallBall（裸窗 + createScene + binder + SBS）→
-           CFRunLoopRun 驱动渲染。 */
+        /* ★ v1.8.57 bootrun 调 UIApplicationMain（legacy 模式，无 SceneManifest）：
+           照开源 Letterpress（TrollStore 悬浮窗 TRHud）—— legacy app + 窗口
+           initWithFrame 不绑 scene + SBS 注册 = 全局悬浮球（无 scene 生命周期，
+           切后台不挂起）。v1.8.52 裸进程（无 UIApplication）createScene 卡死
+           （FrontBoard 不响应非 daemon），v1.8.44 scene-based 不稳定——legacy
+           + UIApplicationMain 是 Letterpress 验证过的正路。窗口在 didFinish
+           建（不绑 scene），SBS 注册全局。 */
         if (argc >= 2 && strcmp(argv[1], "bootrun") == 0) {
             hud_mark(@"ui-main-start");
             /* 后台线程尝试 launchd（TrollStore 下会失败，无害） */
             pthread_t lt;
             pthread_create(&lt, NULL, hud_launchd_thread, NULL);
-            /* 手动建球：窗口 + FBScene createScene（主线程）+ binder + SBS 注册 */
-            [HUDAppDelegate manualInstallBall];
-            hud_mark(@"runloop-start");
-            CFRunLoopRun();
-            hud_mark(@"runloop-exited");
-            return 0;
+            int rc = UIApplicationMain(argc, argv, nil,
+                NSStringFromClass([HUDAppDelegate class]));
+            hud_mark([NSString stringWithFormat:@"exited-%d", rc]);
+            return rc;
         }
         int rc = UIApplicationMain(argc, argv, nil,
             NSStringFromClass([HUDAppDelegate class]));

@@ -341,29 +341,50 @@ static UIWindow *g_manualWindow = nil;
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     hud_mark(@"appdelegate");
 
-    /* ★ v1.8.45 立即手动建球（不等 willConnect）：
-       v1.8.44 实测（17:39 日志铁证）：scene-based UIApplicationMain 不卡
-       （appdelegate 执行），但 scene:willConnect 不触发 —— spawn 的独立进程
-       UIKit 不会主动建 scene，且 scene-based 无 scene 可能被系统 kill
-       （3s 兜底都没机会打标，hud.log 停在 appdelegate）。
-       → 必须像懒人一样【主动 createSceneWithDefinition 创建二进制 FBScene】。
-       manualInstallBall = 建窗口（有 scene 绑 scene）+ FBScene createScene
-       （v1.8.42 失败因裸进程无 UIApplication；现在有 UIApplication 环境，
-       createScene 可能成功）+ UIRootWindowScenePresentationBinder 绑系统
-       root window + SBS 注册。全部 @try 保护，任何一步失败不阻塞进程。 */
-    [HUDAppDelegate manualInstallBall];
+    /* ★ v1.8.57 照开源 Letterpress（TrollStore 悬浮窗 TRHud，GitHub
+       OwnGoalStudio/Letterpress）完整复刻：legacy 模式（无 SceneManifest）+
+       窗口 initWithFrame: 不绑 scene + SBSAccessibilityWindowHostingController
+       registerWindowWithContextID:atLevel: = 全局悬浮球。
+       scene-based 是错的（v1.8.44 实测 willConnect 不触发/不稳定；窗口绑 scene
+       切后台挂起；不绑 scene 在 scene-based app 里 cid-zero）。
+       legacy 模式无 scene 生命周期 → 窗口直接 WindowServer 拿 cid → SBS 注册
+       → SpringBoard 托管 → 切后台全局。不再 createScene（裸进程 v1.8.52 卡死）。 */
+    @try {
+        /* 窗口：initWithFrame 不绑 scene（Letterpress 同款） */
+        self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        self.window.backgroundColor = [UIColor clearColor];
+        self.window.windowLevel = 20000002.0;
+        self.window.clipsToBounds = YES;
 
-    /* 二次兜底：2.5s 后若窗口没建成功（FBScene/binder 全失败），再试一次手动建球 */
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)),
+        UIViewController *vc = [UIViewController new];
+        vc.view.backgroundColor = [UIColor clearColor];
+        self.window.rootViewController = vc;
+
+        /* 悬浮球（靠右，与主 App 球区分） */
+        CGFloat size = 56;
+        CGFloat x = [UIScreen mainScreen].bounds.size.width - 20 - size;
+        CGFloat y = [UIScreen mainScreen].bounds.size.height / 2 - size;
+        HUDBall *ball = [[HUDBall alloc] initWithFrame:CGRectMake(x, y, size, size)];
+        [vc.view addSubview:ball];
+
+        [self.window makeKeyAndVisible];
+        hud_mark(@"window-shown");
+
+        /* SBS 注册（照 Letterpress：_contextId + registerWindowWithContextID:atLevel:） */
+        [self registerToSpringBoard];
+    } @catch (NSException *e) {
+        hud_mark([NSString stringWithFormat:@"hud-window-ex-%@", e.name]);
+    }
+
+    /* 兜底：2s 后没注册成功就再注册一次（cid 可能延迟分配） */
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         @try {
-            if (g_manualWindow == nil) {
-                hud_mark(@"retry-manual-install");
-                [HUDAppDelegate manualInstallBall];
+            if (self.window) {
+                [self registerToSpringBoard];
+                hud_mark(@"re-register-2s");
             }
-        } @catch (NSException *e) {
-            hud_mark([NSString stringWithFormat:@"retry-ex-%@", e.name]);
-        }
+        } @catch (NSException *e) { }
     });
 
     return YES;

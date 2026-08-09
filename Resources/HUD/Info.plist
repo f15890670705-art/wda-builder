@@ -13,9 +13,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.8.56</string>
+	<string>1.8.57</string>
 	<key>CFBundleVersion</key>
-	<string>1.8.56</string>
+	<string>1.8.57</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MinimumOSVersion</key>
@@ -28,28 +28,12 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
-	<!-- ★ v1.8.44 照懒人 RootCore（com.nx.RootCore）真实 Info.plist 铁证：
-	     完整 UIApplicationSceneManifest + SceneDelegate —— RootCore 是
-	     scene-based UIApplication 进程，窗口 initWithWindowScene: 绑 scene
-	     才能拿到有效 WindowServer contextID + 渲染（v1.8.36 legacy 裸窗口
-	     registered-cid 但球不渲染的根因）。 -->
-	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<false/>
-		<key>UISceneConfigurations</key>
-		<dict>
-			<key>UIWindowSceneSessionRoleApplication</key>
-			<array>
-				<dict>
-					<key>UISceneConfigurationName</key>
-					<string>Default Configuration</string>
-					<key>UISceneDelegateClassName</key>
-					<string>HUDSceneDelegate</string>
-				</dict>
-			</array>
-		</dict>
-	</dict>
+	<!-- ★ v1.8.57 照开源 Letterpress（TrollStore 悬浮窗，GitHub OwnGoalStudio/
+	     Letterpress TRHud）铁证：**无 UIApplicationSceneManifest = legacy 模式**！
+	     Letterpress 窗口 initWithFrame: 不绑 scene + SBS 注册 → 全局悬浮球。
+	     scene-based app 的窗口强制绑 scene（切后台 scene 挂起→球消失，不绑
+	     scene 则 cid-zero），legacy 模式无此限制 → 窗口直接 WindowServer 拿 cid
+	     → SBS 注册全局。v1.8.44 加的 SceneManifest（scene-based）是错的，删掉。 -->
 	<!-- daemon 化：SpringBoard 不把它当普通前台 App -->
 	<key>SBAppIsDaemon</key>
 	<true/>

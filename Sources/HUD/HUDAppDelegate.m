@@ -87,62 +87,141 @@ static UIWindow *g_manualWindow = nil;
     hud_mark(@"manual-install-done");
 }
 
-/* 类方法版 createFrontBoardScene（照实例方法，窗口用 g_manualWindow） */
+/* 类方法版 createFrontBoardScene（照实例方法，窗口用 g_manualWindow）
+   ★ v1.8.39 每步独立 try-catch + 标记，精确定位 fb-bind-ex 在哪一步 */
 + (void)manualCreateFrontBoardScene {
     /* ★ v1.8.37 dlopen 加载 FrontBoardServices/FrontBoard（私有 framework，
        不编译链接——SDK 无 PrivateFrameworks 路径，运行时加载即可） */
     @try {
         dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
         dlopen("/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard", RTLD_NOW);
-    } @catch (NSException *e) {}
+    } @catch (NSException *e) {
+        hud_mark(@"fb-dlopen-ex");
+    }
+
+    /* 1. FBSceneManager */
+    Class mgrCls = nil;
+    id manager = nil;
     @try {
-        Class mgrCls = NSClassFromString(@"FBSceneManager");
+        mgrCls = NSClassFromString(@"FBSceneManager");
         if (!mgrCls) { hud_mark(@"fb-mgr-missing"); return; }
-        id manager = nil;
+        hud_mark(@"fb-mgr-ok");
         SEL sharedSel = NSSelectorFromString(@"sharedInstance");
         if ([mgrCls respondsToSelector:sharedSel]) {
             manager = ((id(*)(id, SEL))objc_msgSend)(mgrCls, sharedSel);
         }
         if (!manager) manager = ((id(*)(id, SEL))objc_msgSend)(mgrCls, NSSelectorFromString(@"new"));
         if (!manager) { hud_mark(@"fb-mgr-fail"); return; }
+        hud_mark(@"fb-manager-ok");
+    } @catch (NSException *e) {
+        hud_mark([NSString stringWithFormat:@"fb-mgr-ex-%@", e.name]);
+        return;
+    }
 
+    /* 2. FBSMutableSceneDefinition */
+    id def = nil;
+    @try {
         Class defCls = NSClassFromString(@"FBSMutableSceneDefinition");
         if (!defCls) { hud_mark(@"fb-def-missing"); return; }
-        id def = ((id(*)(id, SEL))objc_msgSend)(defCls, NSSelectorFromString(@"new"));
+        hud_mark(@"fb-def-class-ok");
+        def = ((id(*)(id, SEL))objc_msgSend)(defCls, NSSelectorFromString(@"new"));
+        if (!def) { hud_mark(@"fb-def-new-fail"); return; }
+        hud_mark(@"fb-def-created");
+    } @catch (NSException *e) {
+        hud_mark([NSString stringWithFormat:@"fb-def-ex-%@", e.name]);
+        return;
+    }
 
+    /* 3. identity */
+    @try {
         Class identCls = NSClassFromString(@"FBSMutableSceneIdentity");
         if (identCls) {
-            SEL initSel = NSSelectorFromString(@"initWithBundleIdentifier:");
-            id identity = ((id(*)(id, SEL, id))objc_msgSend)(
-                ((id(*)(id, SEL))objc_msgSend)(identCls, NSSelectorFromString(@"alloc")),
-                initSel, [[NSBundle mainBundle] bundleIdentifier]);
-            if (identity) {
-                ((void(*)(id, SEL, id))objc_msgSend)(def, NSSelectorFromString(@"setIdentity:"), identity);
+            hud_mark(@"fb-ident-class-ok");
+            BOOL identDone = NO;
+            /* 试多种初始化（iOS 版本差异）：initWithBundleIdentifier: / initWithIdentifier: */
+            NSArray *initSels = @[@"initWithBundleIdentifier:", @"initWithIdentifier:"];
+            for (NSString *is in initSels) {
+                SEL initSel = NSSelectorFromString(is);
+                id identAlloc = ((id(*)(id, SEL))objc_msgSend)(identCls, NSSelectorFromString(@"alloc"));
+                if (!identAlloc) continue;
+                id identity = nil;
+                @try {
+                    identity = ((id(*)(id, SEL, id))objc_msgSend)(identAlloc, initSel,
+                        [[NSBundle mainBundle] bundleIdentifier]);
+                } @catch (NSException *e2) {
+                    hud_mark([NSString stringWithFormat:@"fb-ident-%@-ex-%@", is, e2.name]);
+                    continue;
+                }
+                if (identity) {
+                    hud_mark([NSString stringWithFormat:@"fb-ident-ok-%@", is]);
+                    /* setIdentity: 或 setIdentity:with: */
+                    SEL setSel = NSSelectorFromString(@"setIdentity:");
+                    if ([def respondsToSelector:setSel]) {
+                        ((void(*)(id, SEL, id))objc_msgSend)(def, setSel, identity);
+                        hud_mark(@"fb-ident-set-ok");
+                    } else {
+                        hud_mark(@"fb-ident-no-setsel");
+                    }
+                    identDone = YES;
+                    break;
+                }
             }
+            if (!identDone) hud_mark(@"fb-ident-all-fail");
+        } else {
+            hud_mark(@"fb-ident-class-missing");
         }
+    } @catch (NSException *e) {
+        hud_mark([NSString stringWithFormat:@"fb-ident-ex-%@", e.name]);
+    }
 
+    /* 4. FBSMutableSceneParameters */
+    id params = nil;
+    @try {
         Class paramsCls = NSClassFromString(@"FBSMutableSceneParameters");
-        id params = paramsCls ? ((id(*)(id, SEL))objc_msgSend)(paramsCls, NSSelectorFromString(@"new")) : nil;
+        if (!paramsCls) { hud_mark(@"fb-params-missing"); return; }
+        hud_mark(@"fb-params-class-ok");
+        params = ((id(*)(id, SEL))objc_msgSend)(paramsCls, NSSelectorFromString(@"new"));
         if (!params) { hud_mark(@"fb-params-fail"); return; }
+        hud_mark(@"fb-params-created");
+    } @catch (NSException *e) {
+        hud_mark([NSString stringWithFormat:@"fb-params-ex-%@", e.name]);
+        return;
+    }
 
+    /* 5. createSceneWithDefinition:initialParameters: */
+    id fbScene = nil;
+    @try {
         SEL createSel = NSSelectorFromString(@"createSceneWithDefinition:initialParameters:");
         if (![manager respondsToSelector:createSel]) { hud_mark(@"fb-create-no-sel"); return; }
-        id fbScene = ((id(*)(id, SEL, id, id))objc_msgSend)(manager, createSel, def, params);
+        hud_mark(@"fb-create-sel-ok");
+        fbScene = ((id(*)(id, SEL, id, id))objc_msgSend)(manager, createSel, def, params);
         if (!fbScene) { hud_mark(@"fb-create-fail"); return; }
         hud_mark(@"fb-scene-created");
+        /* 存全局防释放 */
+        objc_setAssociatedObject([HUDAppDelegate class], "ovFBScene", fbScene, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } @catch (NSException *e) {
+        hud_mark([NSString stringWithFormat:@"fb-create-ex-%@", e.name]);
+        return;
+    }
 
+    /* 6. binder addScene */
+    @try {
         Class binderCls = NSClassFromString(@"UIRootWindowScenePresentationBinder");
         if (!binderCls) { hud_mark(@"binder-missing"); return; }
+        hud_mark(@"binder-class-ok");
         id binder = ((id(*)(id, SEL))objc_msgSend)(binderCls, NSSelectorFromString(@"new"));
+        if (!binder) { hud_mark(@"binder-new-fail"); return; }
+        hud_mark(@"binder-created");
         SEL addSel = NSSelectorFromString(@"addScene:");
         if ([binder respondsToSelector:addSel]) {
             ((void(*)(id, SEL, id))objc_msgSend)(binder, addSel, fbScene);
             hud_mark(@"fb-scene-bound");
+            objc_setAssociatedObject([HUDAppDelegate class], "ovFBBinder", binder, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         } else {
             hud_mark(@"binder-no-addscene");
         }
     } @catch (NSException *e) {
-        hud_mark([NSString stringWithFormat:@"fb-bind-ex-%@", e.name]);
+        hud_mark([NSString stringWithFormat:@"binder-ex-%@", e.name]);
     }
 }
 

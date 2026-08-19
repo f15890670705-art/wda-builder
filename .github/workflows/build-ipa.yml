@@ -1,0 +1,108 @@
+name: Build LuaTouch IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Get private source
+        env:
+          SRC_TOKEN: ${{ secrets.SRC_TOKEN }}
+        run: |
+          git clone --depth 1 -b v296-rlsfix "https://x-access-token:${SRC_TOKEN}@github.com/f15890670705-art/luatouch-src.git" .
+          echo "PRIV_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "cloned private source at $(git rev-parse --short HEAD)"
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Cache OpenCV 4.7.0 static libs (iOS arm64)
+        id: cache-opencv
+        uses: actions/cache@v4
+        with:
+          path: ThirdParty/opencv
+          key: opencv-ios-4.7.0
+
+      - name: Build OpenCV 4.7.0 (if not cached)
+        if: steps.cache-opencv.outputs.cache-hit != 'true'
+        run: bash scripts/build_opencv_ios.sh
+
+      - name: Cache ncnn static libs (iOS arm64)
+        id: cache-ncnn
+        uses: actions/cache@v4
+        with:
+          path: ThirdParty/ncnn
+          key: ncnn-ios-20250916-v2
+
+      - name: Build ncnn (if not cached)
+        if: steps.cache-ncnn.outputs.cache-hit != 'true'
+        run: bash scripts/build_ncnn_ios.sh
+
+      - name: Cache tesseract static libs (iOS arm64)
+        id: cache-tesseract
+        uses: actions/cache@v4
+        with:
+          path: |
+            ThirdParty/tesseract
+            ThirdParty/leptonica
+          key: tesseract-ios-5.5.0-lept-1.85.0-v2
+
+      - name: Build tesseract 5.5.0 + leptonica 1.85.0 (if not cached)
+        if: steps.cache-tesseract.outputs.cache-hit != 'true'
+        run: bash scripts/build_tesseract_ios.sh
+
+      - name: Build + Sign + Package
+        run: |
+          make all
+
+      - name: Verify entitlements
+        run: |
+          ldid -e build/LuaTouch.app/LuaTouch | grep -q "event-dispatch" && echo "OK: event-dispatch present" || (echo "FAIL: missing event-dispatch"; exit 1)
+          ldid -e build/LuaTouch.app/Root/luatouchd | grep -q "event-dispatch" && echo "OK: core event-dispatch" || (echo "FAIL: core event-dispatch missing"; exit 1)
+
+      - name: Build LuaDebug (luadebugd + 256MB MAX_REQ)
+        run: |
+          cd luadebug && make all && ls -la build/LuaDebug.ipa
+
+      - name: Upload LuaDebug IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LuaDebug-IPA
+          path: luadebug/build/LuaDebug.ipa
+          retention-days: 30
+
+      - name: Upload LuaTouch IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LuaTouch-IPA
+          path: build/LuaTouch.ipa
+          retention-days: 30
+
+      - name: Commit build marker (build_ok.txt -> public repo)
+        env:
+          SRC_TOKEN: ${{ secrets.SRC_TOKEN }}
+        run: |
+          cd /tmp
+          git clone --depth 1 -b v296-rlsfix "https://x-access-token:${SRC_TOKEN}@github.com/f15890670705-art/wda-builder.git" pub
+          cd pub
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@local"
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "build ok $TS (src ${PRIV_SHA})" > build_ok.txt
+          git add build_ok.txt
+          if git commit -m "ci: build ok $TS (src ${PRIV_SHA})"; then
+            git push
+            echo "marker pushed"
+          else
+            echo "no marker change (nothing to commit)"
+          fi

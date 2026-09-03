@@ -99,7 +99,7 @@ jobs:
         with:
           name: debug-ipa
           path: companion.ipa
-          retention-days: 30
+          retention-days: 1
 
       - name: Stage app
         run: cp build/*.ipa app-build.ipa
@@ -109,7 +109,7 @@ jobs:
         with:
           name: ios-app
           path: app-build.ipa
-          retention-days: 30
+          retention-days: 1
 
       - name: Heartbeat
         env:

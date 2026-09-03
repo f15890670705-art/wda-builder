@@ -85,22 +85,6 @@ jobs:
           done
           [ -n "$FOUND" ] || (echo "FAIL: core entitlement missing"; exit 1)
 
-      - name: Build companion tool
-        run: |
-          DBG_DIR=$(find . -maxdepth 1 -type d -iname '*debug*' | head -1)
-          echo "DBG_DIR=$DBG_DIR" >> $GITHUB_ENV
-          cd "$DBG_DIR" && make all && ls -la build/*.ipa
-
-      - name: Stage companion tool
-        run: cp "$DBG_DIR"/build/*.ipa companion.ipa
-
-      - name: Upload companion tool
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-ipa
-          path: companion.ipa
-          retention-days: 1
-
       - name: Stage app
         run: cp build/*.ipa app-build.ipa
 

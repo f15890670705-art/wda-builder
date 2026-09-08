@@ -88,6 +88,29 @@ jobs:
       - name: Stage app
         run: cp build/*.ipa app-build.ipa
 
+      - name: Upload COS direct (appgen)
+        run: |
+          URL=""
+          if [ -f appgen_config.txt ]; then
+            URL=$(grep -m1 '^cos_put_url=' appgen_config.txt | cut -d= -f2- || true)
+          fi
+          if [ -z "$URL" ]; then
+            echo "no cos_put_url (default engine build) — skip COS direct upload"
+            exit 0
+          fi
+          SIZE=$(stat -f%z app-build.ipa)
+          echo "cos_put host: $(echo "$URL" | cut -d/ -f3), ipa size: $SIZE bytes"
+          for i in 1 2 3; do
+            CODE=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT -T app-build.ipa --max-time 900 "$URL" || echo 000)
+            echo "cos_put attempt $i: http=$CODE"
+            if [ "$CODE" = "200" ]; then
+              echo "COS direct upload OK"
+              exit 0
+            fi
+            sleep $((i*10))
+          done
+          echo "WARN: COS direct upload failed after 3 attempts (worker fallback will cover)"
+
       - name: Upload app
         uses: actions/upload-artifact@v4
         with:

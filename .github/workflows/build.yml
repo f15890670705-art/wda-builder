@@ -109,14 +109,7 @@ jobs:
             fi
             sleep $((i*10))
           done
-          echo "WARN: COS direct upload failed after 3 attempts (worker fallback will cover)"
-
-      - name: Upload app
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-app
-          path: app-build.ipa
-          retention-days: 1
+          echo "WARN: COS direct upload failed after 3 attempts (no artifact fallback - task needs retry)"
 
       - name: Heartbeat
         env:

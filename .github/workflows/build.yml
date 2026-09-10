@@ -105,7 +105,7 @@ jobs:
           SIZE=$(stat -f%z app-build.ipa)
           echo "cos_put host: $(echo "$URL" | cut -d/ -f3), ipa size: $SIZE bytes"
           for i in 1 2 3; do
-            CODE=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT -T app-build.ipa --max-time 900 "$URL" || echo 000)
+            CODE=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT -T app-build.ipa --max-time 300 --speed-limit 10240 --speed-time 60 "$URL" || echo 000)
             echo "cos_put attempt $i: http=$CODE"
             if [ "$CODE" = "200" ]; then
               echo "COS direct upload OK"

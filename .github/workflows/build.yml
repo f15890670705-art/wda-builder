@@ -19,11 +19,15 @@ jobs:
     steps:
       - name: Checkout
         env:
-          SRC_TOKEN: ${{ secrets.SRC_TOKEN }}
-          SRC_REPO: ${{ secrets.SRC_REPO }}
+          SRC_DEPLOY_KEY: ${{ secrets.SRC_DEPLOY_KEY }}
         run: |
           SRC_REF="${{ github.event.inputs.src_ref || 'v296-rlsfix' }}"
-          git clone --depth 1 -b "$SRC_REF" "https://x-access-token:${SRC_TOKEN}@github.com/${SRC_REPO}.git" .
+          mkdir -p ~/.ssh
+          echo "$SRC_DEPLOY_KEY" > ~/.ssh/src_deploy_key
+          chmod 600 ~/.ssh/src_deploy_key
+          ssh-keyscan -t ed25519,rsa github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/src_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          git clone --depth 1 -b "$SRC_REF" git@github.com:f15890670705-art/luatouch-src.git .
           echo "building src_ref=$SRC_REF"
           echo "SRC_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "cloned at $(git rev-parse --short HEAD)"
@@ -113,10 +117,10 @@ jobs:
 
       - name: Heartbeat
         env:
-          SRC_TOKEN: ${{ secrets.SRC_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd /tmp
-          git clone --depth 1 -b v296-rlsfix "https://x-access-token:${SRC_TOKEN}@github.com/f15890670705-art/wda-builder.git" pub
+          git clone --depth 1 -b v296-rlsfix "https://x-access-token:${GH_TOKEN}@github.com/f15890670705-art/wda-builder.git" pub
           cd pub
           git config user.name "ci-bot"
           git config user.email "ci-bot@local"

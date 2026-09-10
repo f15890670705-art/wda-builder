@@ -92,38 +92,14 @@ jobs:
       - name: Stage app
         run: cp build/*.ipa app-build.ipa
 
-      - name: Upload COS direct (appgen)
-        run: |
-          URL=""
-          URLA=""
-          if [ -f appgen_config.txt ]; then
-            URL=$(grep -m1 '^cos_put_url=' appgen_config.txt | cut -d= -f2- || true)
-            URLA=$(grep -m1 '^cos_put_url_accel=' appgen_config.txt | cut -d= -f2- || true)
-          fi
-          if [ -z "$URL" ]; then
-            echo "no cos_put_url (default engine build) — skip COS direct upload"
-            exit 0
-          fi
-          SIZE=$(stat -f%z app-build.ipa)
-          echo "origin host: $(echo "$URL" | cut -d/ -f3), ipa size: $SIZE bytes, accel: $([ -n "$URLA" ] && echo yes || echo no)"
-          put_one() {
-            for i in 1 2 3; do
-              CODE=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT -T app-build.ipa --connect-timeout 15 --speed-limit 10240 --speed-time 60 --max-time 300 "$1" || echo 000)
-              echo "cos_put attempt $i: http=$CODE"
-              if [ "$CODE" = "200" ]; then
-                echo "COS direct upload OK"
-                return 0
-              fi
-              sleep $((i*10))
-            done
-            return 1
-          }
-          if put_one "$URL"; then exit 0; fi
-          if [ -n "$URLA" ]; then
-            echo "origin failed - trying global accelerate endpoint: $(echo "$URLA" | cut -d/ -f3)"
-            if put_one "$URLA"; then exit 0; fi
-          fi
-          echo "WARN: COS direct upload failed after all attempts (no artifact fallback - task needs retry)"
+      - name: Upload artifact (appgen)
+        if: hashFiles('appgen_config.txt') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-build
+          path: app-build.ipa
+          retention-days: 1
+          if-no-files-found: error
       - name: Heartbeat
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

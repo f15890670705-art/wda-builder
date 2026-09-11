@@ -92,8 +92,7 @@ jobs:
       - name: Stage app
         run: cp build/*.ipa app-build.ipa
 
-      - name: Upload artifact (appgen)
-        if: hashFiles('appgen_config.txt') != ''
+      - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-build

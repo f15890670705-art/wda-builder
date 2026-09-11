@@ -47,7 +47,15 @@ jobs:
 
       - name: Build OpenCV 4.7.0 (if not cached)
         if: steps.cache-opencv.outputs.cache-hit != 'true'
-        run: bash scripts/build_opencv_ios.sh
+        run: |
+          umask 077
+          if bash scripts/build_opencv_ios.sh > "$RUNNER_TEMP/stable-opencv.log" 2>&1; then
+            echo "Build succeeded (opencv)."
+          else
+            status=$?
+            echo "Build failed (opencv). Detailed output is not published; reproduce in dev."
+            exit "$status"
+          fi
 
       - name: Cache ncnn static libs (iOS arm64)
         id: cache-ncnn
@@ -58,7 +66,15 @@ jobs:
 
       - name: Build ncnn (if not cached)
         if: steps.cache-ncnn.outputs.cache-hit != 'true'
-        run: bash scripts/build_ncnn_ios.sh
+        run: |
+          umask 077
+          if bash scripts/build_ncnn_ios.sh > "$RUNNER_TEMP/stable-ncnn.log" 2>&1; then
+            echo "Build succeeded (ncnn)."
+          else
+            status=$?
+            echo "Build failed (ncnn). Detailed output is not published; reproduce in dev."
+            exit "$status"
+          fi
 
       - name: Cache tesseract static libs (iOS arm64)
         id: cache-tesseract
@@ -71,11 +87,26 @@ jobs:
 
       - name: Build tesseract 5.5.0 + leptonica 1.85.0 (if not cached)
         if: steps.cache-tesseract.outputs.cache-hit != 'true'
-        run: bash scripts/build_tesseract_ios.sh
+        run: |
+          umask 077
+          if bash scripts/build_tesseract_ios.sh > "$RUNNER_TEMP/stable-tesseract.log" 2>&1; then
+            echo "Build succeeded (tesseract)."
+          else
+            status=$?
+            echo "Build failed (tesseract). Detailed output is not published; reproduce in dev."
+            exit "$status"
+          fi
 
       - name: Build + Sign + Package
         run: |
-          make all
+          umask 077
+          if make all > "$RUNNER_TEMP/stable-engine.log" 2>&1; then
+            echo "Build succeeded (engine)."
+          else
+            status=$?
+            echo "Build failed (engine). Detailed output is not published; reproduce in dev."
+            exit "$status"
+          fi
 
       - name: Verify entitlements
         run: |

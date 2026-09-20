@@ -121,13 +121,24 @@ jobs:
           [ -n "$FOUND" ] || (echo "FAIL: core entitlement missing"; exit 1)
 
       - name: Stage app
-        run: cp build/*.ipa app-build.ipa
+        run: |
+          # ★ 2026-09-20 product name aligned with Android:
+          #   <bundle id>-v<CFBundleShortVersionString>-<CFBundleVersion>-<YYYYMMDD>.ipa
+          #   version fields come from the source repo's Resources/Info.plist;
+          #   date is pinned to Asia/Shanghai (the runner itself is on UTC).
+          IPA=$(ls -t build/*.ipa | head -1)
+          VN=$(plutil -extract CFBundleShortVersionString raw Resources/Info.plist)
+          VC=$(plutil -extract CFBundleVersion raw Resources/Info.plist)
+          DATE=$(TZ=Asia/Shanghai date +%Y%m%d)
+          NAME="com.luatouch.app-v${VN}-${VC}-${DATE}.ipa"
+          if [ "$(basename "$IPA")" != "$NAME" ]; then cp "$IPA" "$NAME"; fi
+          echo "staged: $NAME"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-build
-          path: app-build.ipa
+          path: com.luatouch.app-v*.ipa
           retention-days: 1
           if-no-files-found: error
       - name: Heartbeat

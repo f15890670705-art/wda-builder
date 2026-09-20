@@ -123,17 +123,19 @@ jobs:
       - name: Stage app
         id: stage
         run: |
-          # ★ 2026-09-20 product name aligned with Android:
-          #   <bundle id>-v<CFBundleShortVersionString>-<CFBundleVersion>-<YYYYMMDD>.ipa
-          #   version fields come from the source repo's Resources/Info.plist;
+          # ★ 2026-09-20 product name:
+          #   <bundle id>-v<CFBundleShortVersionString>-<YYYYMMDD>.ipa
+          #   ⛔ only ONE version number: on iOS CFBundleVersion always equals
+          #      CFBundleShortVersionString (make bump writes both at once), so
+          #      including it produced a duplicated v1.10.1056-1.10.1056.
+          #   version comes from the source repo's Resources/Info.plist;
           #   date is pinned to Asia/Shanghai (the runner itself is on UTC).
           #   ⚠ cp 不带判断：ipa 可能已经就叫这个名字（Makefile 已改名），
           #   但它在 build/ 里，而 upload-artifact 按仓库根相对路径找文件 ⇒ 必须拷一份到根目录。
           IPA=$(ls -t build/*.ipa | head -1)
           VN=$(plutil -extract CFBundleShortVersionString raw Resources/Info.plist)
-          VC=$(plutil -extract CFBundleVersion raw Resources/Info.plist)
           DATE=$(TZ=Asia/Shanghai date +%Y%m%d)
-          NAME="com.luatouch.app-v${VN}-${VC}-${DATE}.ipa"
+          NAME="com.luatouch.app-v${VN}-${DATE}.ipa"
           cp "$IPA" "$NAME"
           echo "ipa_name=$NAME" >> "$GITHUB_OUTPUT"
           echo "staged: $NAME"

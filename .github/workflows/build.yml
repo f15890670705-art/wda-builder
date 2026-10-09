@@ -1,0 +1,240 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      src_ref:
+        description: 'ref to build (branch/tag)'
+        required: false
+        default: 'main'
+      upload_base:
+        description: 'myweb base url for CI direct OSS upload (optional)'
+        required: false
+        default: ''
+      upload_task:
+        description: 'genapp task id for direct upload (optional)'
+        required: false
+        default: ''
+      upload_token:
+        description: 'one-time token for direct upload (optional)'
+        required: false
+        default: ''
+      config_enc:
+        description: 'base64(IV+AES-256-CBC(appgen config)) — v1.9 direct mode (optional)'
+        required: false
+        default: ''
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        env:
+          SRC_DEPLOY_KEY: ${{ secrets.SRC_DEPLOY_KEY }}
+        run: |
+          SRC_REF="${{ github.event.inputs.src_ref || 'main' }}"
+          mkdir -p ~/.ssh
+          echo "$SRC_DEPLOY_KEY" > ~/.ssh/src_deploy_key
+          chmod 600 ~/.ssh/src_deploy_key
+          ssh-keyscan -t ed25519,rsa github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/src_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          git clone --depth 1 -b "$SRC_REF" git@github.com:f15890670705-art/luatouch-ios-src.git .
+          echo "building src_ref=$SRC_REF"
+          echo "SRC_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "cloned at $(git rev-parse --short HEAD)"
+
+      # ★ v1.9 直传配置模式：config 经 AES-256-CBC 加密随 dispatch input 送达（worker 用
+      #   ci_config_key 加密，此处用 CONFIG_KEY secret 解密）—— 不再有 appgen 分支，
+      #   构建机从此不需要源码库写权限。无 config_enc 时走旧 appgen 分支模式（兼容）。
+      - name: Write appgen config (decrypt, if provided)
+        if: ${{ github.event.inputs.config_enc != '' }}
+        env:
+          CONFIG_KEY: ${{ secrets.CONFIG_KEY }}
+          CONFIG_ENC: ${{ github.event.inputs.config_enc }}
+        run: |
+          set -e
+          echo "$CONFIG_ENC" | base64 -d > "$RUNNER_TEMP/cfg.all"
+          IV="$(dd if="$RUNNER_TEMP/cfg.all" bs=1 count=16 2>/dev/null | xxd -p | tr -d '\n')"
+          dd if="$RUNNER_TEMP/cfg.all" of="$RUNNER_TEMP/cfg.ct" bs=1 skip=16 2>/dev/null
+          openssl enc -d -aes-256-cbc -K "$CONFIG_KEY" -iv "$IV" -in "$RUNNER_TEMP/cfg.ct" -out appgen_config.txt
+          echo "appgen config decrypted: $(wc -c < appgen_config.txt) bytes"
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Cache OpenCV 4.7.0 static libs (iOS arm64)
+        id: cache-opencv
+        uses: actions/cache@v4
+        with:
+          path: ThirdParty/opencv
+          key: opencv-ios-4.8.0-src${{ github.event.inputs.src_ref || 'main' }}
+
+      - name: Build OpenCV 4.7.0 (if not cached)
+        if: steps.cache-opencv.outputs.cache-hit != 'true'
+        run: |
+          umask 077
+          if bash scripts/build_opencv_ios.sh > "$RUNNER_TEMP/stable-opencv.log" 2>&1; then
+            echo "Build succeeded (opencv)."
+          else
+            status=$?
+            echo "Build failed (opencv). Detailed output is not published; reproduce in dev."
+            exit "$status"
+          fi
+
+      - name: Cache ncnn static libs (iOS arm64)
+        id: cache-ncnn
+        uses: actions/cache@v4
+        with:
+          path: ThirdParty/ncnn
+          key: ncnn-ios-20250916-src${{ github.event.inputs.src_ref || 'main' }}
+
+      - name: Build ncnn (if not cached)
+        if: steps.cache-ncnn.outputs.cache-hit != 'true'
+        run: |
+          umask 077
+          if bash scripts/build_ncnn_ios.sh > "$RUNNER_TEMP/stable-ncnn.log" 2>&1; then
+            echo "Build succeeded (ncnn)."
+          else
+            status=$?
+            echo "Build failed (ncnn). Detailed output is not published; reproduce in dev."
+            exit "$status"
+          fi
+
+      - name: Cache tesseract static libs (iOS arm64)
+        id: cache-tesseract
+        uses: actions/cache@v4
+        with:
+          path: |
+            ThirdParty/tesseract
+            ThirdParty/leptonica
+          key: tesseract-ios-5.5.0-lept-1.85.0-src${{ github.event.inputs.src_ref || 'main' }}
+
+      - name: Build tesseract 5.5.0 + leptonica 1.85.0 (if not cached)
+        if: steps.cache-tesseract.outputs.cache-hit != 'true'
+        run: |
+          umask 077
+          if bash scripts/build_tesseract_ios.sh > "$RUNNER_TEMP/stable-tesseract.log" 2>&1; then
+            echo "Build succeeded (tesseract)."
+          else
+            status=$?
+            echo "Build failed (tesseract). Detailed output is not published; reproduce in dev."
+            exit "$status"
+          fi
+
+      - name: Build + Sign + Package
+        run: |
+          umask 077
+          touch "$RUNNER_TEMP/stable-engine.log"; chmod 600 "$RUNNER_TEMP/stable-engine.log"
+          umask 022   # ★ v1.11 log 文件单独 600，构建产物恢复正常权限（600/700 会让巨魔 Failed to open (null)）
+          if make all >> "$RUNNER_TEMP/stable-engine.log" 2>&1; then
+            echo "Build succeeded (engine)."
+          else
+            status=$?
+            echo "Build failed (engine). Error lines:"
+            tail -400 "$RUNNER_TEMP/stable-engine.log"
+            exit "$status"
+          fi
+
+      - name: Verify entitlements
+        run: |
+          APP_DIR=$(ls -d build/*.app | head -1)
+          APP_BIN=$(basename "$APP_DIR" .app)
+          ldid -e "$APP_DIR/$APP_BIN" | grep -q "event-dispatch" && echo "OK: entitlement present" || (echo "FAIL: entitlement missing"; exit 1)
+          FOUND=""
+          for f in "$APP_DIR"/Root/*; do
+            [ -f "$f" ] && [ -x "$f" ] || continue
+            if ldid -e "$f" 2>/dev/null | grep -q "event-dispatch"; then echo "OK: core entitlement"; FOUND=1; break; fi
+          done
+          [ -n "$FOUND" ] || (echo "FAIL: core entitlement missing"; exit 1)
+
+      - name: Stage app
+        id: stage
+        run: |
+          # ★ 2026-09-20 product name:
+          #   <bundle id>-v<CFBundleShortVersionString>-<YYYYMMDD>.ipa
+          #   ⛔ only ONE version number: on iOS CFBundleVersion always equals
+          #      CFBundleShortVersionString (make bump writes both at once), so
+          #      including it produced a duplicated v1.10.1056-1.10.1056.
+          #   version comes from the source repo's Resources/Info.plist;
+          #   date is pinned to Asia/Shanghai (the runner itself is on UTC).
+          #   ⚠ cp 不带判断：ipa 可能已经就叫这个名字（Makefile 已改名），
+          #   但它在 build/ 里，而 upload-artifact 按仓库根相对路径找文件 ⇒ 必须拷一份到根目录。
+          IPA=$(ls -t build/*.ipa | head -1)
+          VN=$(plutil -extract CFBundleShortVersionString raw Resources/Info.plist)
+          DATE=$(TZ=Asia/Shanghai date +%Y%m%d)
+          NAME="com.luatouch.app-v${VN}-${DATE}.ipa"
+          cp "$IPA" "$NAME"
+          echo "ipa_name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "staged: $NAME"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-build
+          path: ${{ steps.stage.outputs.ipa_name }}
+          retention-days: 1
+          if-no-files-found: error
+
+      # ★ v1.8 CI 直传客户 out 桶（OSS 全球加速端点）：一次性 token 换预签名 PUT，
+      #   成品 zip 直接进 genapp/<task>/app.zip —— worker 不再中转。
+      #   best-effort：任何失败都不 fail job（worker HEAD 核对后自动回落 artifact 老路）。
+      - name: Direct OSS upload (best-effort, presigned)
+        if: ${{ github.event.inputs.upload_token != '' }}
+        continue-on-error: true
+        env:
+          UP_BASE: ${{ github.event.inputs.upload_base }}
+          UP_TASK: ${{ github.event.inputs.upload_task }}
+          UP_TOKEN: ${{ github.event.inputs.upload_token }}
+        run: |
+          set -e
+          IPA="${{ steps.stage.outputs.ipa_name }}"
+          test -n "$IPA" && test -f "$IPA" || { echo "CI_UPLOAD_NO_IPA"; exit 0; }
+          python3 -m zipfile -c "$RUNNER_TEMP/app.zip" "$IPA"
+          RESP="$(curl -s -m 30 "$UP_BASE/api/worker/genapp/ciupload?task=$UP_TASK&token=$UP_TOKEN")"
+          echo "$RESP"
+          URL="$(echo "$RESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("upload_url",""))')"
+          test -n "$URL" || { echo "CI_UPLOAD_NO_URL"; exit 0; }
+          OK=0
+          for i in 1 2 3; do
+            if [ "$i" = "2" ]; then
+              HTTP="$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/octet-stream' -T "$RUNNER_TEMP/app.zip" "$URL")"
+            else
+              HTTP="$(curl -s -o /dev/null -w '%{http_code}' -X PUT -T "$RUNNER_TEMP/app.zip" "$URL")"
+            fi
+            echo "PUT try$i -> $HTTP"
+            if [ "$HTTP" = "200" ]; then
+              SIZE=$(wc -c < "$RUNNER_TEMP/app.zip" | tr -d ' ')
+              echo "CI_OSS_UPLOAD_OK size=$SIZE"
+              OK=1; break
+            fi
+            sleep 5
+          done
+          [ "$OK" = "1" ] || echo "CI_OSS_UPLOAD_FAILED (worker will fallback to artifact relay)"
+          exit 0
+
+      - name: Heartbeat
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd /tmp
+          git clone --depth 1 -b main "https://x-access-token:${GH_TOKEN}@github.com/f15890670705-art/wda-builder.git" pub
+          cd pub
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@local"
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "build ok $TS" > build_ok.txt
+          git add build_ok.txt
+          if git commit -m "update heartbeat"; then
+            git push
+            echo "marker pushed"
+          else
+            echo "no marker change (nothing to commit)"
+          fi
